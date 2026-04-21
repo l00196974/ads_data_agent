@@ -23,6 +23,7 @@ class LLMConfig(BaseModel):
     provider: str = "anthropic"
     model: str = "claude-sonnet-4-6"
     api_key: str = ""
+    base_url: str = ""
 
 
 class PersistenceConfig(BaseModel):
@@ -46,6 +47,7 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     raw["llm"] = {
         "provider": os.getenv("LLM_PROVIDER", "anthropic"),
         "model": os.getenv("LLM_MODEL", "claude-sonnet-4-6"),
-        "api_key": os.getenv("ANTHROPIC_API_KEY", ""),
+        "api_key": os.getenv("LLM_API_KEY", os.getenv("ANTHROPIC_API_KEY", "")),
+        "base_url": os.getenv("LLM_BASE_URL", ""),
     }
     return AppConfig(**raw)

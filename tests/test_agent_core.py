@@ -30,3 +30,31 @@ def test_build_agent_called_with_correct_model():
         )
         call_kwargs = mock_create.call_args
         assert call_kwargs is not None
+
+
+def test_build_model_openai_protocol(monkeypatch):
+    from agent.config import AppConfig, LLMConfig
+    from agent.core import _build_model
+    from langchain_openai import ChatOpenAI
+
+    cfg = AppConfig(
+        llm=LLMConfig(
+            provider="openai",
+            model="gpt-4o",
+            api_key="sk-test",
+            base_url="https://api.openai.com/v1",
+        )
+    )
+    model = _build_model(cfg)
+    assert isinstance(model, ChatOpenAI)
+
+
+def test_build_model_anthropic_returns_string():
+    from agent.config import AppConfig, LLMConfig
+    from agent.core import _build_model
+
+    cfg = AppConfig(
+        llm=LLMConfig(provider="anthropic", model="claude-sonnet-4-6", api_key="sk-ant")
+    )
+    model = _build_model(cfg)
+    assert model == "anthropic:claude-sonnet-4-6"

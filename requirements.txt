@@ -6,3 +6,5 @@ uvicorn[standard]
 python-dotenv
 pyyaml
 pydantic>=2.0
+langchain-openai
+
