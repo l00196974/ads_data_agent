@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import HumanMessage
 from langgraph.types import Command
+from langgraph.errors import GraphInterrupt
 from api.models import ChatRequest, ConfirmRequest, AppendRequest
 from agent.core import build_agent, _checkpointer, _store
 from agent.session import SessionManager
@@ -54,20 +55,40 @@ async def _stream_agent(user_id: str, message: str):
                     data = {"token": chunk.content}
                     yield f"event: token\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
+            elif kind == "on_chain_end":
+                # LangGraph interrupt 通过 on_chain_end 事件中的 __interrupt__ key 传递
+                chain_output = event.get("data", {}).get("output", {})
+                if isinstance(chain_output, dict) and "__interrupt__" in chain_output:
+                    interrupts = chain_output["__interrupt__"]
+                    # interrupts 是 Interrupt 对象列表，每项有 value 和 id 字段
+                    interrupt_value = interrupts[0].value if interrupts else {}
+                    if not isinstance(interrupt_value, dict):
+                        interrupt_value = {"msg": str(interrupt_value)}
+                    data = {
+                        "type": "confirm_required",
+                        "action": interrupt_value.get("action", "operation"),
+                        "msg": interrupt_value.get("msg", "操作需要确认"),
+                        "preview": interrupt_value.get("preview", []),
+                    }
+                    yield f"event: interrupt\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+    except GraphInterrupt as e:
+        # GraphInterrupt 异常：某些 LangGraph 版本在 interrupt_on 触发时抛出此异常
+        interrupts = e.args[0] if e.args else []
+        interrupt_value = interrupts[0].value if interrupts else {}
+        if not isinstance(interrupt_value, dict):
+            interrupt_value = {"msg": str(interrupt_value)}
+        data = {
+            "type": "confirm_required",
+            "action": interrupt_value.get("action", "operation"),
+            "msg": interrupt_value.get("msg", "操作需要确认"),
+            "preview": interrupt_value.get("preview", []),
+        }
+        yield f"event: interrupt\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
     except Exception as e:
-        # 检测 interrupt（LangGraph 在 interrupt_on 触发时抛出特定异常或通过 __interrupt__ 传递）
-        error_str = str(e)
-        if "interrupt" in error_str.lower() or "__interrupt__" in error_str:
-            data = {
-                "type": "confirm_required",
-                "action": "operation",
-                "msg": f"操作需要确认：{error_str[:200]}",
-                "preview": []
-            }
-            yield f"event: interrupt\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
-        else:
-            data = {"error": error_str}
-            yield f"event: error\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+        data = {"error": str(e)}
+        yield f"event: error\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
     yield f"event: done\ndata: {json.dumps({'status': 'complete'}, ensure_ascii=False)}\n\n"
 
