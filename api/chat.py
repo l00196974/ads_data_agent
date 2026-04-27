@@ -1,114 +1,143 @@
-import json
+import asyncio
+from uuid import uuid4
+
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
-from langchain_core.messages import HumanMessage
 from langgraph.types import Command
-from langgraph.errors import GraphInterrupt
-from api.models import ChatRequest, ConfirmRequest, AppendRequest
-from agent.core import build_agent, _checkpointer, _store
+
+from agent.config import load_config
+from agent.core import build_agent
 from agent.session import SessionManager
 from agent.user_space import UserSpace
-from agent.config import load_config
+from api.channel import WebSSEChannel, agent_runner, channel_registry
+from api.models import AppendRequest, ChatRequest, ConfirmRequest, SkillCreateRequest
 from skills.system import SYSTEM_SKILLS
 
 router = APIRouter()
 session_mgr = SessionManager()
 cfg = load_config()
 
+PLAN_INSTRUCTION = """## 执行流程（严格遵守）
 
-def _get_agent(user_id: str):
+收到用户问题后，按以下顺序执行：
+
+1. **第一步调用 `send_plan`**，声明本次将要执行的任务（2-5 个）
+   - 每项格式：`{"id": "t1", "name": "任务描述"}`
+   - id 按 `t1, t2, t3...` 顺序，name 简短中文（≤20 字）
+   - **plan 中只包含真正的业务工具调用**（如 query_campaign_report / analyze_budget / detect_anomaly / build_chart），**不要把 `send_to_user`、`send_plan` 这种展示/规划动作列为任务**——它们是输出指令，不是计算步骤
+   - **任务数量必须等于你接下来要调用的业务工具数量**——每个任务对应一次业务工具调用，按声明的顺序执行
+   - 任务的 running / done 状态由系统根据工具执行自动推断，**你不需要也无法手动上报状态**
+
+2. **按 plan 顺序依次调用业务工具**（如 query_campaign_report / build_chart / analyze_budget），一次一个
+
+3. **所有业务工具完成后，调用 `send_to_user` 展示最终结果**
+
+## 中间进度提示
+
+执行中需要告知用户细节进度时，**只能**使用：
+
+```
+send_to_user(action="progress", content="正在生成折线图...")
+```
+
+**禁止**把进度信息放进 `action="text"`：
+- ❌ send_to_user(action="text", content="正在分析数据...")
+- ❌ 任何"正在..."/"已获取..."/"接下来..."的 text 输出
+
+`progress` 显示在顶部 tips，不进对话流。
+
+## 最终输出顺序
+
+所有 `send_to_user(action="text"|"chart")` 必须按：
+
+1. `action="text"` — 数据结论和分析摘要
+2. `action="chart"` — 图表（可多个）
+3. `action="text"` — 引导追问（如"如需下钻分析某渠道..."），**只能最后**
+
+## 标准示例
+
+用户问"查询最近7天曝光数据并生成折线图"：
+
+```
+send_plan(tasks=[
+  {"id": "t1", "name": "查询最近7天数据"},
+  {"id": "t2", "name": "生成趋势折线图"},
+])
+
+send_to_user(action="progress", content="正在查询数据库...")
+query_campaign_report(days=7)
+
+send_to_user(action="progress", content="正在构建图表配置...")
+build_chart(data=..., chart_type="line")
+
+send_to_user(action="text", content="**分析结果**\n- 总曝光：xxx")
+send_to_user(action="chart", ...)
+send_to_user(action="text", content="如需下钻分析某渠道，请告诉我。")
+```
+
+send_plan 是计划展示，不是询问用户，无需等待用户回复。
+"""
+
+
+def _make_build_fn(user_id: str):
     us = UserSpace(user_id, cfg.persistence.data_dir)
-    system_prompt = us.get_agents_md()
-    return build_agent(
-        user_id=user_id,
-        system_prompt=system_prompt,
-        skills=SYSTEM_SKILLS,
-        interrupt_on=cfg.agent.interrupt_on,
-        cfg=cfg,
-    )
+    system_prompt = PLAN_INSTRUCTION + "\n\n" + us.get_agents_md()
 
+    def _build(extra_tools=None):
+        return build_agent(
+            user_id=user_id,
+            system_prompt=system_prompt,
+            skills=SYSTEM_SKILLS,
+            interrupt_on=cfg.agent.interrupt_on,
+            cfg=cfg,
+            extra_tools=extra_tools,
+        )
 
-async def _stream_agent(user_id: str, message: str):
-    agent = _get_agent(user_id)
-    langgraph_config = session_mgr.get_config(user_id)
-    input_msg = {"messages": [HumanMessage(content=message)]}
-
-    try:
-        async for event in agent.astream_events(input_msg, config=langgraph_config, version="v2"):
-            kind = event["event"]
-
-            if kind == "on_tool_start":
-                data = {"type": "tool_start", "tool": event["name"], "msg": f"调用 {event['name']}..."}
-                yield f"event: step\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
-
-            elif kind == "on_tool_end":
-                output = event.get("data", {}).get("output", {})
-                if isinstance(output, dict) and output.get("type") in ["line", "bar", "pie", "scatter", "heatmap"]:
-                    yield f"event: chart\ndata: {json.dumps(output, ensure_ascii=False)}\n\n"
-                else:
-                    data = {"type": "tool_end", "tool": event["name"], "msg": f"{event['name']} 执行完成"}
-                    yield f"event: step\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
-
-            elif kind == "on_chat_model_stream":
-                chunk = event["data"].get("chunk")
-                if chunk and hasattr(chunk, "content") and chunk.content:
-                    data = {"token": chunk.content}
-                    yield f"event: token\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
-
-            elif kind == "on_chain_end":
-                # LangGraph interrupt 通过 on_chain_end 事件中的 __interrupt__ key 传递
-                chain_output = event.get("data", {}).get("output", {})
-                if isinstance(chain_output, dict) and "__interrupt__" in chain_output:
-                    interrupts = chain_output["__interrupt__"]
-                    # interrupts 是 Interrupt 对象列表，每项有 value 和 id 字段
-                    interrupt_value = interrupts[0].value if interrupts else {}
-                    if not isinstance(interrupt_value, dict):
-                        interrupt_value = {"msg": str(interrupt_value)}
-                    data = {
-                        "type": "confirm_required",
-                        "action": interrupt_value.get("action", "operation"),
-                        "msg": interrupt_value.get("msg", "操作需要确认"),
-                        "preview": interrupt_value.get("preview", []),
-                    }
-                    yield f"event: interrupt\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
-
-    except GraphInterrupt as e:
-        # GraphInterrupt 异常：某些 LangGraph 版本在 interrupt_on 触发时抛出此异常
-        interrupts = e.args[0] if e.args else []
-        interrupt_value = interrupts[0].value if interrupts else {}
-        if not isinstance(interrupt_value, dict):
-            interrupt_value = {"msg": str(interrupt_value)}
-        data = {
-            "type": "confirm_required",
-            "action": interrupt_value.get("action", "operation"),
-            "msg": interrupt_value.get("msg", "操作需要确认"),
-            "preview": interrupt_value.get("preview", []),
-        }
-        yield f"event: interrupt\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
-
-    except Exception as e:
-        data = {"error": str(e)}
-        yield f"event: error\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
-
-    yield f"event: done\ndata: {json.dumps({'status': 'complete'}, ensure_ascii=False)}\n\n"
+    return _build
 
 
 @router.post("/{user_id}")
 async def chat(user_id: str, req: ChatRequest):
+    session_id = f"{user_id}_{uuid4().hex[:8]}"
+    queue: asyncio.Queue = asyncio.Queue()
+    channel = WebSSEChannel(user_id, session_id, queue)
+    channel_registry.register(session_id, channel)
+
+    asyncio.create_task(
+        agent_runner.run(
+            channel,
+            req.message,
+            _make_build_fn(user_id),
+            session_mgr.get_config(user_id),
+        )
+    )
+
+    async def event_generator():
+        while True:
+            chunk = await queue.get()
+            yield chunk
+            if "event: done" in chunk or "event: error" in chunk:
+                channel_registry.unregister(session_id)
+                break
+
     return StreamingResponse(
-        _stream_agent(user_id, req.message),
+        event_generator(),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "X-Session-Id": session_id,
+        },
     )
 
 
 @router.post("/{user_id}/confirm")
 async def confirm(user_id: str, req: ConfirmRequest):
-    agent = _get_agent(user_id)
-    langgraph_config = session_mgr.get_config(user_id)
-    resume_value = True if req.action == "approve" else False
-    agent.invoke(Command(resume=resume_value), config=langgraph_config)
-    return {"status": "ok", "action": req.action}
+    channel = channel_registry.get(req.session_id)
+    if not channel or not isinstance(channel, WebSSEChannel):
+        return {"status": "not_found"}
+    channel.resolve_confirm(req.action == "approve")
+    return {"status": "ok"}
 
 
 @router.post("/{user_id}/cancel")
@@ -118,7 +147,8 @@ async def cancel(user_id: str):
 
 @router.post("/{user_id}/append")
 async def append_message(user_id: str, req: AppendRequest):
-    agent = _get_agent(user_id)
-    langgraph_config = session_mgr.get_config(user_id)
-    agent.invoke(Command(resume={"additional_context": req.message}), config=langgraph_config)
+    build_fn = _make_build_fn(user_id)
+    agent = build_fn()
+    config = session_mgr.get_config(user_id)
+    agent.invoke(Command(resume={"additional_context": req.message}), config=config)
     return {"status": "appended", "message": req.message}

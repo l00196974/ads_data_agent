@@ -1,5 +1,9 @@
-def query_campaign_report(date: str, user_id: str) -> dict:
-    """查询广告活动报表（Mock 数据）"""
+import asyncio
+
+
+async def query_campaign_report(date: str, user_id: str) -> dict:
+    """查询广告活动报表（Mock 数据，模拟 800ms DB 延迟）"""
+    await asyncio.sleep(0.8)
     return {
         "date": date,
         "user_id": user_id,

@@ -1,5 +1,9 @@
-def detect_anomaly(date: str, region: str, user_id: str) -> dict:
-    """检测投放异常（Mock 数据）"""
+import asyncio
+
+
+async def detect_anomaly(date: str, region: str, user_id: str) -> dict:
+    """检测投放异常（Mock 数据，模拟 700ms 异常扫描）"""
+    await asyncio.sleep(0.7)
     return {
         "date": date,
         "region": region,

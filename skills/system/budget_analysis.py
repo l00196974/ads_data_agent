@@ -1,5 +1,9 @@
-def analyze_budget(user_id: str) -> dict:
-    """分析预算使用情况（Mock 数据）"""
+import asyncio
+
+
+async def analyze_budget(user_id: str) -> dict:
+    """分析预算使用情况（Mock 数据，模拟 500ms 计算延迟）"""
+    await asyncio.sleep(0.5)
     total_budget = 100000.0
     total_spend = 67500.0
     spend_rate = total_spend / total_budget
