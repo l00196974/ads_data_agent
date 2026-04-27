@@ -856,7 +856,7 @@ git commit -m "feat: FastAPI backend with SSE streaming and HitL endpoints"
 **Step 1: 初始化 Vue 3 项目**
 
 ```bash
-cd /home/linxiankun/ads_data_agent
+cd D:/workplace/ads_data_agent
 npm create vite@latest frontend -- --template vue
 cd frontend
 npm install

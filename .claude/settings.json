@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/bin/python *)",
+      "Bash(.venv/bin/pip *)",
+      "Bash(.venv/bin/pytest *)",
+      "Bash(curl *)",
+      "Bash(npm install *)",
+      "Bash(npm run *)",
+      "Bash(pip *)",
+      "Bash(wait *)",
+      "Bash(git *)",
+      "Bash(ls *)",
+      "Bash(ps *)",
+      "Bash(find *)",
+      "Bash(grep *)",
+      "mcp__chrome-devtools__*",
+      "mcp__playwright__*"
+    ]
+  }
+}

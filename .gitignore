@@ -8,3 +8,24 @@ __pycache__/
 node_modules/
 dist/
 *.egg-info/
+
+# Logs
+*.log
+
+# Playwright / e2e test artifacts
+.playwright-mcp/
+e2e-test-login
+login-page-*
+chat-*.png
+exec-*.png
+
+# Memory / hook plugin runtime data
+.remember/
+
+# Windows Mark-of-the-Web sidecar files
+*:Zone.Identifier
+*Zone.Identifier
+
+# Claude Code per-machine settings (share .claude/settings.json, ignore .local)
+.claude/settings.local.json
+
