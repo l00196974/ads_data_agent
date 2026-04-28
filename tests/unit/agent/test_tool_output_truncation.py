@@ -17,7 +17,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from agent.tool_output_truncation import ToolOutputTruncationMiddleware
+from agent.middleware.tool_output_truncation import ToolOutputTruncationMiddleware
 
 
 @pytest.fixture
@@ -28,7 +28,7 @@ def tmp_data_dir(tmp_path):
 def _patch_thread_id(thread_id: str):
     """Mock langgraph's get_config() so the middleware sees our thread_id."""
     return patch(
-        "agent.tool_output_truncation.get_config",
+        "agent.middleware.tool_output_truncation.get_config",
         return_value={"configurable": {"thread_id": thread_id}},
     )
 

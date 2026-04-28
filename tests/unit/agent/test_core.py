@@ -16,8 +16,10 @@ def test_session_manager_config():
 
 
 def test_build_agent_called_with_correct_model():
-    with patch("agent.core.create_deep_agent") as mock_create, \
-         patch("agent.core.get_checkpointer") as mock_cp:
+    # Patch where the symbols are *used* (agent.builder), not where they're
+    # re-exported (agent.core).
+    with patch("agent.builder.create_deep_agent") as mock_create, \
+         patch("agent.builder.get_checkpointer") as mock_cp:
         mock_create.return_value = MagicMock()
         mock_cp.return_value = MagicMock()
         from agent.core import build_agent

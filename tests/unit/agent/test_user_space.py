@@ -15,7 +15,7 @@ def test_agents_md_merged(tmp_path):
     us = UserSpace("user_001", data_dir=str(tmp_path))
     # 写入用户自定义 agents.md
     us.agents_md_path.write_text("# 用户自定义指令\n- 始终用中文回答")
-    content = us.get_agents_md(system_md_path="config/system_agents.md")
+    content = us.get_agents_md(system_md_path="prompts/system_agent.md")
     assert "华为广告数据分析助手" in content   # 来自系统模板
     assert "始终用中文回答" in content          # 来自用户自定义
 
