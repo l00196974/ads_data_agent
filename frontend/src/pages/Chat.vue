@@ -19,10 +19,30 @@
         </div>
         <div class="skill-section">
           <p class="section-label">我的 Skills</p>
-          <div v-for="s in userSkills" :key="s.name" class="skill-item">
-            <span class="skill-dot">●</span>{{ s.name }}
+          <div
+            v-for="s in userSkills"
+            :key="s.name"
+            class="skill-item user-skill-item"
+            :title="s.description || s.name"
+          >
+            <span class="skill-dot">●</span>
+            <span class="skill-name">{{ s.name }}</span>
+            <button
+              v-if="s.type === 'skill_md'"
+              class="skill-delete"
+              :title="`删除 ${s.name}`"
+              @click="deleteSkill(s.name)"
+            >×</button>
           </div>
-          <div class="skill-item add-btn">+ 添加</div>
+          <div class="skill-item add-btn" @click="triggerUpload">+ 添加</div>
+          <input
+            ref="fileInputRef"
+            type="file"
+            accept=".zip"
+            style="display: none"
+            @change="onFileChange"
+          />
+          <div v-if="uploadStatus" class="upload-status">{{ uploadStatus }}</div>
         </div>
       </aside>
 
@@ -38,45 +58,42 @@
 
         <!-- 消息列表 -->
         <div class="messages" ref="messagesEl">
-          <div
-            v-for="(msg, i) in messages"
-            :key="i"
-            :class="['bubble', msg.role, msg.type === 'chart' ? 'chart-bubble' : '']"
-          >
-            <template v-if="msg.type === 'text'">
-              <div v-if="msg.role === 'user'" class="bubble-text">{{ msg.content }}</div>
-              <div v-else class="markdown-body" v-html="renderMd(msg.content)" />
-            </template>
-            <ChartWidget v-else-if="msg.type === 'chart'" :config="msg.content" />
-            <template v-else-if="msg.type === 'plan'">
-              <div class="exec-panel">
-                <div class="exec-panel-title">📋 执行计划</div>
-                <div class="task-list">
-                  <div
-                    v-for="task in msg.content"
-                    :key="task.id"
-                    :class="['task-item', task.status]"
-                  >
-                    <span class="task-icon">
-                      {{ task.status === 'done' ? '✅' : task.status === 'running' ? '🔄' : '⬜' }}
-                    </span>
-                    <span class="task-name">{{ task.name }}</span>
-                    <span v-if="task.status === 'running'" class="task-badge">执行中</span>
-                  </div>
-                </div>
-                <div v-if="msg.isLatest && tipText" class="tip-area">
-                  <span class="tip-dot">●</span>
-                  <span class="tip-text">{{ tipText }}</span>
+          <template v-for="(msg, i) in messages" :key="i">
+            <!-- 用户消息：保留红色气泡 -->
+            <div v-if="msg.type === 'text' && msg.role === 'user'" class="bubble user">
+              <div class="bubble-text">{{ msg.content }}</div>
+            </div>
+            <!-- AI 文本：直接平铺到页面，无气泡 -->
+            <div
+              v-else-if="msg.type === 'text'"
+              class="ai-response markdown-body"
+              v-html="renderMd(msg.content)"
+            />
+            <!-- 图表：保留卡片容器（图表渲染需要明确边界） -->
+            <div v-else-if="msg.type === 'chart'" class="bubble chart-bubble">
+              <ChartWidget :config="msg.content" />
+            </div>
+            <!-- 思考过程：append-only 日志，可折叠 -->
+            <div v-else-if="msg.type === 'thinking'" class="thinking-group">
+              <div class="thinking-summary" @click="msg.collapsed = !msg.collapsed">
+                <span class="thinking-toggle">{{ msg.collapsed ? '▶' : '▼' }}</span>
+                <span class="thinking-label">
+                  思考过程<span v-if="msg.collapsed">（{{ msg.entries.length }} 步）</span>
+                </span>
+              </div>
+              <div v-if="!msg.collapsed" class="thinking-entries">
+                <div
+                  v-for="(entry, j) in msg.entries"
+                  :key="j"
+                  :class="['thinking-entry', `entry-${entry.kind}`]"
+                >
+                  <span class="entry-label">{{ entry.label }}</span>
                 </div>
               </div>
-            </template>
-          </div>
-          <div v-if="isStreaming && !messages.some(m => m.type === 'plan')" class="bubble assistant">
+            </div>
+          </template>
+          <div v-if="isStreaming && currentThinkingIdx === null && currentStreamingIdx === null" class="thinking-hint">
             <span class="typing">正在思考...</span>
-          </div>
-          <div v-if="streamingThought" class="bubble assistant streaming-thought" data-testid="streaming-thought">
-            <div class="thought-label">💭 思考流</div>
-            <div class="thought-content">{{ streamingThought }}</div>
           </div>
         </div>
 
@@ -133,15 +150,18 @@ const interruptMsg = ref('')
 const interruptPreview = ref([])
 const systemSkills = ref([])
 const userSkills = ref([])
+const fileInputRef = ref(null)
+const uploadStatus = ref('')
 const appendHint = ref(false)
 const messagesEl = ref(null)
-const currentToken = ref('')
-const streamingThought = ref('')
+// 当前流式文本气泡在 messages 中的下标。token 累加到这里，非 token 事件复位。
+const currentStreamingIdx = ref(null)
+// 当前思考过程分组在 messages 中的下标。所有 plan/step 事件 append 进这个分组。
+// token 到来时关闭分组，让下次 plan/step 自然新开下一个。
+const currentThinkingIdx = ref(null)
 const progressText = ref('')
 // conversationId: 同一对话内多轮共享，"新对话"按钮重置为 null（后端会生成新 id）
 const conversationId = ref(localStorage.getItem('conversation_id') || null)
-const planTasks = ref([])
-const tipText = ref('')
 let sseClient = null
 
 function renderMd(content) {
@@ -149,24 +169,76 @@ function renderMd(content) {
   return DOMPurify.sanitize(rawHtml)
 }
 
-onMounted(async () => {
+async function refreshSkills() {
   try {
     const resp = await fetch(`/api/skills/${userId}`)
     const data = await resp.json()
     systemSkills.value = data.system || []
     userSkills.value = data.user || []
   } catch (_) {}
-})
+}
+
+onMounted(refreshSkills)
+
+function triggerUpload() {
+  fileInputRef.value?.click()
+}
+
+async function onFileChange(e) {
+  const file = e.target.files?.[0]
+  if (!file) return
+  uploadStatus.value = '上传中...'
+  try {
+    const fd = new FormData()
+    fd.append('file', file)
+    const resp = await fetch(`/api/skills/${userId}/upload`, { method: 'POST', body: fd })
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => '')
+      uploadStatus.value = `失败: ${detail.slice(0, 100)}`
+      return
+    }
+    const data = await resp.json()
+    uploadStatus.value = `已添加: ${data.name}`
+    await refreshSkills()
+  } catch (err) {
+    uploadStatus.value = `网络错误: ${err.message}`
+  } finally {
+    e.target.value = ''
+    setTimeout(() => { uploadStatus.value = '' }, 4000)
+  }
+}
+
+async function deleteSkill(name) {
+  if (!confirm(`确认删除 "${name}"？`)) return
+  try {
+    const resp = await fetch(`/api/skills/${userId}/${encodeURIComponent(name)}`, { method: 'DELETE' })
+    if (!resp.ok) {
+      uploadStatus.value = `删除失败: ${await resp.text()}`
+      return
+    }
+    uploadStatus.value = `已删除: ${name}`
+    await refreshSkills()
+  } catch (err) {
+    uploadStatus.value = `删除错误: ${err.message}`
+  } finally {
+    setTimeout(() => { uploadStatus.value = '' }, 3000)
+  }
+}
 
 async function sendOrAppend() {
   if (!inputText.value.trim()) return
   const msg = inputText.value.trim()
   inputText.value = ''
 
-  // 执行中：追加要求
+  // 执行中：后端会 cancel + 重起 agent_runner，前端在同 SSE 连接上接新一轮事件。
+  // 必须重置游标——否则新一轮 plan/step/token 会被追加到上一轮的 thinking 分组 / 文本块上。
   if (isStreaming.value) {
+    messages.value.push({ role: 'user', type: 'text', content: msg })
+    currentThinkingIdx.value = null
+    currentStreamingIdx.value = null
     appendHint.value = true
     setTimeout(() => { appendHint.value = false }, 3000)
+    scrollToBottom()
     await fetch(`/api/chat/${userId}/append`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -177,86 +249,72 @@ async function sendOrAppend() {
 
   // 新对话
   messages.value.push({ role: 'user', type: 'text', content: msg })
-  currentToken.value = ''
-  streamingThought.value = ''
+  currentStreamingIdx.value = null
+  currentThinkingIdx.value = null
   isStreaming.value = true
+
+  // token 到来时关闭思考分组，让下一波工具事件自然新开下一个
+  const closeStreaming = () => { currentStreamingIdx.value = null }
+  const closeThinking = () => { currentThinkingIdx.value = null }
+
+  // 取活跃的思考分组，没有就新建一个
+  const getOrCreateThinking = () => {
+    if (currentThinkingIdx.value === null) {
+      messages.value.push({ type: 'thinking', entries: [], collapsed: false })
+      currentThinkingIdx.value = messages.value.length - 1
+    }
+    return messages.value[currentThinkingIdx.value]
+  }
+  const appendLog = (entry) => {
+    getOrCreateThinking().entries.push(entry)
+    scrollToBottom()
+  }
 
   sseClient = new SSEClient(`/api/chat/${userId}`, {
       plan: (data) => {
-        // 清除旧 plans 的 isLatest，确保只有最新的 plan 接收更新
-        messages.value.forEach(m => { if (m.type === 'plan') m.isLatest = false })
-
-        // 每个任务创建时就包含所有属性，确保 Vue 响应式
-        const tasks = data.tasks.map(t => ({
-          id: t.id,
-          name: t.name,
-          status: 'pending'
-        }))
-        console.log('[plan] created new plan, initial tasks:', tasks.map(t => `${t.name}: ${t.status}`))
-
-        // 新 plan，标记为最新
-        const newPlan = {
-          role: 'plan',
-          type: 'plan',
-          content: tasks,
-          isLatest: true,
-          toolIndex: -1,  // 初始：还没开始任何工具
-        }
-        console.log('[plan] created new plan, toolIndex =', newPlan.toolIndex, 'tasks =', tasks.length)
-
-        messages.value.push(newPlan)
-        scrollToBottom()
+        closeStreaming()
+        const names = (data.tasks || []).map(t => t.name).join(' → ')
+        appendLog({ label: `计划：${names}`, kind: 'plan' })
       },
       step: (data) => {
-        // step 事件只用于更新 tips 文字，不再更新任务状态
-        // 任务状态更新完全由 task_update 事件驱动（Agent主动上报，绝对准确）
-        tipText.value = data.msg
-        scrollToBottom()
-      },
-      task_update: (data) => {
-        // Agent 主动上报任务状态更新
-        // data: {task_id, status}，status = pending | running | done
-        const { task_id, status } = data
-
-        // 找到最新的 plan 消息
-        const planMsg = messages.value.find(msg => msg.type === 'plan' && msg.isLatest)
-        if (!planMsg) {
-          console.warn('[task_update] no active plan found')
-          return
-        }
-
-        // 根据 task_id 找到对应任务，更新状态
-        // 创建全新数组确保 Vue 响应式更新
-        const newTasks = planMsg.content.map(task => {
-          if (task.id === task_id) {
-            return { ...task, status }
+        closeStreaming()
+        // 同一工具的 start/end 是同一条 log 的状态变化，不是两条独立条目。
+        // 不用图标，靠 "执行中..." 后缀表达运行态——end 漏报时也只是后缀残留，不会误显示假完成。
+        if (data.type === 'tool_start') {
+          appendLog({ label: `${data.msg} 执行中...`, kind: 'running' })
+        } else {
+          const group = currentThinkingIdx.value !== null
+            ? messages.value[currentThinkingIdx.value]
+            : null
+          if (group) {
+            for (let k = group.entries.length - 1; k >= 0; k--) {
+              if (group.entries[k].kind === 'running') {
+                group.entries[k].label = group.entries[k].label.replace(/\s*执行中\.\.\.$/, '')
+                group.entries[k].kind = 'done'
+                break
+              }
+            }
           }
-          return task
-        })
-
-        planMsg.content = newTasks
-        console.log(`[t=${performance.now().toFixed(0)}ms] [task_update] task ${task_id} -> ${status}`)
-
-        scrollToBottom()
+          scrollToBottom()
+        }
+      },
+      task_update: (_data) => {
+        // append-only 模式下不需要状态推断，忽略
       },
       token: (data) => {
-        // 累加流式 token，渲染为半透明的"思考流"气泡，给用户实时反馈
-        // 一旦最终 text 到达就清空（避免和正式答案重复）
-        streamingThought.value += data.token
-        // 限长保留最近 800 字，旧内容截断成省略号
-        if (streamingThought.value.length > 800) {
-          streamingThought.value = '…' + streamingThought.value.slice(-800)
+        // 流式 token：关闭思考分组，累加到当前 assistant 气泡
+        closeThinking()
+        if (currentStreamingIdx.value === null) {
+          messages.value.push({ role: 'assistant', type: 'text', content: data.token })
+          currentStreamingIdx.value = messages.value.length - 1
+        } else {
+          messages.value[currentStreamingIdx.value].content += data.token
         }
-        scrollToBottom()
-      },
-      text: (data) => {
-        // 最终 text 到达：清空思考流，正式气泡入消息流
-        streamingThought.value = ''
-        messages.value.push({ role: 'assistant', type: 'text', content: data.content })
         scrollToBottom()
       },
       render: (data) => {
-        // send_to_user(action="chart") — 插入图表消息
+        closeStreaming()
+        closeThinking()
         messages.value.push({ role: 'assistant', type: 'chart', content: {
           type: data.component,
           title: data.title,
@@ -266,38 +324,44 @@ async function sendOrAppend() {
         scrollToBottom()
       },
       progress: (data) => {
+        // progress 不进消息流，仅在顶部状态栏短暂展示
         progressText.value = data.message
       },
       chart: (data) => {
-        // 兼容旧格式（如有）
+        closeStreaming()
+        closeThinking()
         messages.value.push({ role: 'assistant', type: 'chart', content: data })
         scrollToBottom()
       },
       interrupt: (data) => {
+        closeStreaming()
+        closeThinking()
         isInterrupted.value = true
-        isStreaming.value = false
+        // 不要清 isStreaming——SSE 连接还活着，用户 confirm 后后端会继续推。
+        // 清成 false 会导致输入框激活、新对话覆盖 sseClient、孤立旧连接。
         interruptMsg.value = data.message || data.msg || '需要您确认此操作'
         interruptPreview.value = data.preview || []
       },
       done: () => {
-        // 标记当前 plan 不再是最新（隐藏 tips）
-        messages.value.forEach(m => { if (m.type === 'plan') m.isLatest = false })
+        closeStreaming()
+        // 折叠最近一个思考分组（如果还在活跃）
+        if (currentThinkingIdx.value !== null) {
+          messages.value[currentThinkingIdx.value].collapsed = true
+        }
+        closeThinking()
         isStreaming.value = false
         progressText.value = ''
-        tipText.value = ''
-        streamingThought.value = ''
       },
       error: (data) => {
+        closeStreaming()
+        closeThinking()
         messages.value.push({
           role: 'assistant',
           type: 'text',
           content: `错误：${data.error || data.message || String(data)}`,
         })
-        messages.value.forEach(m => { if (m.type === 'plan') m.isLatest = false })
         isStreaming.value = false
         progressText.value = ''
-        tipText.value = ''
-        streamingThought.value = ''
       },
     })
 
@@ -346,12 +410,10 @@ function scrollToBottom() {
 function clearChat() {
   messages.value = []
   progressText.value = ''
-  currentToken.value = ''
-  streamingThought.value = ''
+  currentStreamingIdx.value = null
+  currentThinkingIdx.value = null
   isStreaming.value = false
   appendHint.value = false
-  planTasks.value = []
-  tipText.value = ''
   // 切换 conversationId 为 null：下次发请求时后端会创建新 thread，旧对话历史不参与
   conversationId.value = null
   localStorage.removeItem('conversation_id')
@@ -479,6 +541,43 @@ function logout() {
   color: #c7000b;
   cursor: pointer;
   font-weight: 500;
+}
+.user-skill-item {
+  position: relative;
+}
+.user-skill-item .skill-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.skill-delete {
+  background: transparent;
+  border: none;
+  color: #999;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 4px;
+  border-radius: 4px;
+  margin-left: 4px;
+  display: none;
+}
+.user-skill-item:hover .skill-delete {
+  display: inline-block;
+}
+.skill-delete:hover {
+  background: rgba(199, 0, 11, 0.1);
+  color: #c7000b;
+}
+.upload-status {
+  font-size: 11px;
+  color: #595959;
+  padding: 6px 8px;
+  margin-top: 4px;
+  background: rgba(199, 0, 11, 0.06);
+  border-radius: 4px;
+  word-break: break-all;
 }
 
 .chat-area {
@@ -615,95 +714,82 @@ function logout() {
   min-width: unset;
   padding: 12px;
 }
-.bubble.plan {
-  align-self: flex-start;
-  background: rgba(255, 251, 230, 0.85);
-  backdrop-filter: blur(10px);
-  border: 1px solid #ffe58f;
-  width: 480px;
-  max-width: 92%;
-  min-width: unset;
-  padding: 14px 16px;
-  border-bottom-left-radius: 4px;
-}
-.exec-panel {
-  width: 100%;
-}
-.exec-panel-title {
-  font-size: 12px;
-  font-weight: 600;
-  color: #8c6a00;
-  margin-bottom: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-.task-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-bottom: 10px;
-}
-.task-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  color: #595959;
-  padding: 6px 10px;
-  border-radius: 6px;
-  background: rgba(0, 0, 0, 0.03);
-  transition: background 0.2s;
-}
-.task-item.running {
-  background: rgba(199, 0, 11, 0.08);
-  color: #c7000b;
-  font-weight: 500;
-}
-.task-item.done {
-  color: #389e0d;
-  background: rgba(82, 196, 26, 0.06);
-}
-.task-icon {
-  font-size: 14px;
-  flex-shrink: 0;
-}
-.task-name {
-  flex: 1;
-}
-.task-badge {
-  font-size: 11px;
-  padding: 2px 8px;
-  background: rgba(199, 0, 11, 0.12);
-  color: #c7000b;
-  border-radius: 10px;
-  font-weight: 500;
-}
-.tip-area {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 10px;
-  background: rgba(240, 245, 255, 0.8);
-  border-radius: 6px;
-  border-left: 3px solid #2f54eb;
-}
-.tip-dot {
-  color: #2f54eb;
-  font-size: 8px;
-  animation: blink 1s infinite;
-  flex-shrink: 0;
-}
-.tip-text {
-  font-size: 12px;
-  color: #2f54eb;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 1;
-}
 .typing {
   color: #8c8c8c;
   letter-spacing: 2px;
+}
+
+/* 思考过程分组（append-only 日志） */
+.thinking-group {
+  align-self: flex-start;
+  width: 100%;
+  max-width: 760px;
+  padding: 4px 0;
+}
+.thinking-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #8c8c8c;
+  cursor: pointer;
+  user-select: none;
+  padding: 4px 0;
+  transition: color 0.15s ease;
+}
+.thinking-summary:hover {
+  color: #c7000b;
+}
+.thinking-toggle {
+  font-size: 9px;
+  width: 10px;
+  text-align: center;
+}
+.thinking-label {
+  font-weight: 500;
+  letter-spacing: 0.2px;
+}
+.thinking-entries {
+  margin: 4px 0 4px 14px;
+  padding: 6px 0 6px 14px;
+  border-left: 2px solid rgba(199, 0, 11, 0.15);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.thinking-entry {
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: #595959;
+}
+.thinking-entry.entry-running {
+  color: #c7000b;
+}
+.thinking-entry.entry-plan {
+  color: #595959;
+  font-weight: 500;
+}
+.entry-label {
+  word-break: break-all;
+  font-family: ui-monospace, SFMono-Regular, "Cascadia Mono", Menlo, monospace;
+}
+
+/* AI 回复：直接平铺到页面，不带气泡背景，限读宽 */
+.ai-response {
+  align-self: flex-start;
+  width: 100%;
+  max-width: 760px;
+  padding: 4px 4px;
+  color: #1a1a1a;
+  font-size: 15px;
+  line-height: 1.75;
+}
+
+/* 思考占位提示（无气泡，仅文字） */
+.thinking-hint {
+  align-self: flex-start;
+  padding: 8px 4px;
+  color: #8c8c8c;
 }
 
 .append-hint {
@@ -907,31 +993,4 @@ function logout() {
   }
 }
 
-/* 流式思考气泡 — P2 */
-.streaming-thought {
-  background: rgba(120, 130, 150, 0.08);
-  border: 1px dashed rgba(120, 130, 150, 0.35);
-  border-radius: 8px;
-  padding: 10px 14px;
-  font-style: normal;
-  margin: 6px 0;
-  max-width: 92%;
-}
-.streaming-thought .thought-label {
-  font-size: 12px;
-  color: #8a93a3;
-  font-weight: 500;
-  margin-bottom: 6px;
-  letter-spacing: 0.3px;
-}
-.streaming-thought .thought-content {
-  font-size: 13px;
-  line-height: 1.6;
-  color: #525a6b;
-  white-space: pre-wrap;
-  word-break: break-word;
-  max-height: 110px;
-  overflow-y: auto;
-  font-family: ui-monospace, SFMono-Regular, "Cascadia Mono", Menlo, monospace;
-}
 </style>

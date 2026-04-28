@@ -24,10 +24,6 @@ class WebSSEChannel(BaseChannel):
         data = json.dumps({"tasks": tasks}, ensure_ascii=False)
         await self._queue.put(f"event: plan\ndata: {data}\n\n")
 
-    async def send_task_update(self, task_id: str, status: str) -> None:
-        data = json.dumps({"task_id": task_id, "status": status}, ensure_ascii=False)
-        await self._queue.put(f"event: task_update\ndata: {data}\n\n")
-
     async def send_progress(self, message: str) -> None:
         data = json.dumps({"message": message}, ensure_ascii=False)
         await self._queue.put(f"event: progress\ndata: {data}\n\n")
@@ -52,7 +48,7 @@ class WebSSEChannel(BaseChannel):
             return "ok"
 
         async def send_to_user(
-            action: Literal["text", "chart", "progress"],
+            action: Literal["chart", "progress"],
             content: str = "",
             chart_type: str = "bar",
             title: str = "",
@@ -60,21 +56,15 @@ class WebSSEChannel(BaseChannel):
             series: list = [],
         ) -> str:
             """
-            向 Web 聊天界面发送输出。分析完成后必须主动调用此工具展示结果。
+            向 Web 聊天界面发送结构化产物。
 
             action 参数：
-            - "text"：发送 Markdown 文本（支持表格、代码块、加粗）
             - "chart"：渲染交互图表，需提供 chart_type/title/x_data/series
               chart_type: bar（柱状图）| line（折线图）| pie（饼图）| scatter（散点图）
               x_data: X 轴标签列表，如 ["渠道A", "渠道B"]
               series: 数据系列列表，每项 {"name": "RPM", "data": [10.2, 8.5]}
             - "progress"：发送进度状态，显示为顶部状态栏，不占消息流
               如 "正在下钻定向包维度..."
-
-            Web Channel 独有能力：
-            - 支持 ECharts 交互图表（可缩放、hover tooltip）
-            - 支持 Markdown 富文本渲染
-            - 支持多图表连续展示
             """
             if action == "chart":
                 data = json.dumps(
@@ -85,23 +75,25 @@ class WebSSEChannel(BaseChannel):
             elif action == "progress":
                 data = json.dumps({"message": content}, ensure_ascii=False)
                 await channel._queue.put(f"event: progress\ndata: {data}\n\n")
-            elif action == "text":
-                data = json.dumps({"content": content}, ensure_ascii=False)
-                await channel._queue.put(f"event: text\ndata: {data}\n\n")
             return "ok"
 
         return [send_plan, send_to_user]
 
     async def wait_for_confirm(self, message: str, preview: list) -> bool:
+        # 每次进 wait 前先重置——防止上一次遗留的 set 状态让本次立即返回脏值
+        self._confirm_event.clear()
+        self._confirm_result = None
         data = json.dumps({"message": message, "preview": preview}, ensure_ascii=False)
         await self._queue.put(f"event: interrupt\ndata: {data}\n\n")
         await self._confirm_event.wait()
-        self._confirm_event.clear()
-        return self._confirm_result
+        return bool(self._confirm_result)
 
     async def close(self) -> None:
         await self._queue.put(f"event: done\ndata: {{}}\n\n")
 
     def resolve_confirm(self, approve: bool) -> None:
+        # 幂等：双击 / 重复请求只认第一次，避免覆盖有效结果
+        if self._confirm_event.is_set():
+            return
         self._confirm_result = approve
         self._confirm_event.set()

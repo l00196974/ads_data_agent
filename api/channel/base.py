@@ -46,10 +46,6 @@ class BaseChannel(ABC):
         """发送任务计划列表 [{"id": "t1", "name": "..."}]"""
 
     @abstractmethod
-    async def send_task_update(self, task_id: str, status: str) -> None:
-        """更新单个任务状态：pending / running / done"""
-
-    @abstractmethod
     async def send_progress(self, message: str) -> None:
         """显示在顶部进度条的状态文字（不进消息流）"""
 

@@ -1,3 +1,5 @@
+import asyncio
+
 from langchain_core.messages import HumanMessage
 from langgraph.errors import GraphInterrupt
 from langgraph.types import Command
@@ -7,8 +9,24 @@ from .base import BaseChannel
 
 def _is_meta_tool(name: str) -> bool:
     """Channel-injected IO tools (send_plan / send_to_user / ...) — they
-    don't represent business work, so they don't drive task status."""
+    represent display/output actions, not business work, so they don't
+    produce step events."""
     return name.startswith("send_")
+
+
+async def _resume_safely(agent, approve: bool, config: dict) -> None:
+    """resume 期间收到 cancel 不能直接打断 ainvoke——会让 langgraph 写到一半就停，
+    checkpointer 留下半完成 state，下一轮 restart 读到 corrupt 状态。
+    把 ainvoke 包成独立 task + shield，cancel 时也等它跑完再 raise。"""
+    inner = asyncio.create_task(agent.ainvoke(Command(resume=approve), config=config))
+    try:
+        await asyncio.shield(inner)
+    except asyncio.CancelledError:
+        try:
+            await inner
+        except Exception:
+            pass
+        raise
 
 
 class AgentRunner:
@@ -23,33 +41,12 @@ class AgentRunner:
         extra_tools = skill if isinstance(skill, list) else [skill]
         agent = build_agent_fn(extra_tools=extra_tools)
 
-        # Per-run plan state. The runner — not the LLM — owns task status:
-        # send_plan sets the tasks; subsequent business-tool start/end events
-        # advance the cursor and emit task_update.
-        tasks: list[dict] = []
-        cursor = 0  # next task awaiting a tool_start
+        # 仅用于 progress 文案区分"规划中"vs"执行中"——状态推断已经下放给前端。
+        business_tools_started = 0
 
-        async def _mark_running() -> None:
-            nonlocal cursor
-            while cursor < len(tasks) and tasks[cursor].get("status") == "done":
-                cursor += 1
-            if cursor >= len(tasks):
-                return
-            task = tasks[cursor]
-            if task.get("status") in (None, "pending"):
-                task["status"] = "running"
-                await channel.send_task_update(task["id"], "running")
-
-        async def _mark_done() -> None:
-            nonlocal cursor
-            if cursor >= len(tasks):
-                return
-            task = tasks[cursor]
-            if task.get("status") == "running":
-                task["status"] = "done"
-                await channel.send_task_update(task["id"], "done")
-                cursor += 1
-
+        # 被 cancel 时不要关 channel——chat handler 在追问场景下要复用它继续推 SSE。
+        # 只有正常结束 / 普通异常时才发 done 事件。
+        should_close = True
         try:
             async for event in agent.astream_events(
                 {"messages": [HumanMessage(content=message)]},
@@ -58,41 +55,19 @@ class AgentRunner:
             ):
                 kind = event["event"]
                 if kind == "on_chat_model_start":
-                    # Cover the silent gaps between tool calls — the LLM may
-                    # take 3-15s to emit a tool_call, during which the UI
-                    # would otherwise look frozen.
-                    if not tasks:
-                        await channel.send_progress("AI 正在规划任务...")
-                    elif cursor < len(tasks):
-                        await channel.send_progress("AI 正在准备下一步...")
-                    else:
-                        await channel.send_progress("AI 正在生成最终分析...")
+                    # Cover the silent gap before the LLM emits its first tool_call.
+                    msg = "AI 正在规划任务..." if business_tools_started == 0 else "AI 正在准备下一步..."
+                    await channel.send_progress(msg)
                 elif kind == "on_chat_model_stream":
                     chunk = event["data"].get("chunk")
                     if chunk and hasattr(chunk, "content") and chunk.content:
                         await channel.send_token(chunk.content)
                 elif kind == "on_tool_start":
                     tool_name = event.get("name", "tool")
-                    input_data = event.get("data", {}).get("input", {})
-
-                    # Capture plan from send_plan input — runner becomes the
-                    # source of truth for task status from this point on.
-                    if tool_name == "send_plan":
-                        raw = input_data.get("tasks", []) if isinstance(input_data, dict) else []
-                        tasks = [
-                            {"id": t.get("id"), "name": t.get("name", ""), "status": "pending"}
-                            for t in raw
-                            if isinstance(t, dict) and t.get("id")
-                        ]
-                        cursor = 0
-                        continue
-
                     if _is_meta_tool(tool_name):
                         continue
-
-                    # Real business tool → mark current task as running.
-                    await _mark_running()
-
+                    business_tools_started += 1
+                    input_data = event.get("data", {}).get("input", {})
                     step_msg = tool_name
                     if isinstance(input_data, dict) and input_data:
                         first_key = next(iter(input_data.keys()))
@@ -103,7 +78,6 @@ class AgentRunner:
                     tool_name = event.get("name", "tool")
                     if _is_meta_tool(tool_name):
                         continue
-                    await _mark_done()
                     await channel.send_step(tool_name, "tool_end")
                 elif kind == "on_chain_end":
                     outputs = event.get("data", {}).get("output", {})
@@ -115,18 +89,22 @@ class AgentRunner:
                         approve = await channel.wait_for_confirm(
                             iv.get("message", ""), iv.get("preview", [])
                         )
-                        await agent.ainvoke(Command(resume=approve), config=config)
+                        await _resume_safely(agent, approve, config)
+        except asyncio.CancelledError:
+            should_close = False  # chat handler 会在同一 channel 上接着跑新一轮
+            raise
         except GraphInterrupt as e:
             interrupts = e.args[0] if e.args else []
             iv = interrupts[0].value if interrupts else {}
             if not isinstance(iv, dict):
                 iv = {"message": str(iv), "preview": []}
             approve = await channel.wait_for_confirm(iv.get("message", ""), iv.get("preview", []))
-            await agent.ainvoke(Command(resume=approve), config=config)
+            await _resume_safely(agent, approve, config)
         except Exception as e:
             await channel.send_token(f"\n[错误] {e}")
         finally:
-            await channel.close()
+            if should_close:
+                await channel.close()
 
 
 agent_runner = AgentRunner()

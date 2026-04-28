@@ -16,10 +16,6 @@ class CLIChannel(BaseChannel):
         for t in tasks:
             print(f"  ⬜ {t.get('id', '?')}: {t.get('name', '')}")
 
-    async def send_task_update(self, task_id: str, status: str) -> None:
-        icon = "🔄" if status == "running" else "✅"
-        print(f"\n{icon} [{task_id}] {status}")
-
     async def send_progress(self, message: str) -> None:
         print(f"[进度] {message}")
 
@@ -32,7 +28,7 @@ class CLIChannel(BaseChannel):
             return "ok"
 
         async def send_to_user(
-            action: Literal["text", "chart", "progress"],
+            action: Literal["chart", "progress"],
             content: str = "",
             title: str = "",
             x_data: list = [],
@@ -40,20 +36,13 @@ class CLIChannel(BaseChannel):
             **kwargs,
         ) -> str:
             """
-            向命令行终端发送输出。分析完成后主动调用此工具展示结果。
+            向命令行终端发送结构化产物。
 
             action 参数：
-            - "text"：打印纯文本（不支持 Markdown，请用纯文本格式）
             - "chart"：终端不支持图形渲染，改为打印数据摘要表格
             - "progress"：打印 [进度] 前缀的状态行
-
-            CLI Channel 限制：
-            - 不支持图表图形渲染，chart 时输出文字摘要即可
-            - 不支持 Markdown 格式，加粗/表格等请改为纯文本
             """
-            if action == "text":
-                print(content)
-            elif action == "chart":
+            if action == "chart":
                 print(f"\n[图表: {title}]")
                 for s in series:
                     for label, val in zip(x_data, s.get("data", [])):

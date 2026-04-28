@@ -1,9 +1,10 @@
-"""Unit tests for AgentRunner state machine.
+"""Unit tests for AgentRunner.
 
 Mocks langgraph's astream_events to feed deterministic event sequences,
 then asserts the SSE events the runner emits to the channel queue.
 
-These tests run offline — no LLM calls, no network.
+Append-only model: runner forwards step events for business tools, filters
+out send_* meta-tools. No task state inference, no task_update events.
 """
 import asyncio
 import json
@@ -58,40 +59,22 @@ def _run_with_events(events: list[dict]) -> list[dict]:
     return asyncio.run(_drain(queue))
 
 
-def test_task_updates_emitted_in_order():
-    """Each business tool's start/end produces task_update(running)/(done)
-    for the matching plan task, in declaration order."""
+def test_business_tool_emits_step_events():
+    """Each business tool emits step:tool_start and step:tool_end."""
     emitted = _run_with_events([
-        {"event": "on_tool_start", "name": "send_plan", "data": {"input": {
-            "tasks": [
-                {"id": "t1", "name": "查询数据"},
-                {"id": "t2", "name": "生成图表"},
-            ]
-        }}},
-        {"event": "on_tool_end", "name": "send_plan", "data": {}},
-        {"event": "on_tool_start", "name": "query_campaign_report", "data": {"input": {"days": 7}}},
+        {"event": "on_tool_start", "name": "query_campaign_report", "data": {"input": {}}},
         {"event": "on_tool_end", "name": "query_campaign_report", "data": {}},
-        {"event": "on_tool_start", "name": "build_chart", "data": {"input": {}}},
-        {"event": "on_tool_end", "name": "build_chart", "data": {}},
     ])
-
-    sequence = [(e["event"], e["data"].get("task_id"), e["data"].get("status")) for e in emitted]
-    assert sequence == [
-        ("task_update", "t1", "running"),
-        ("step", None, None),
-        ("task_update", "t1", "done"),
-        ("step", None, None),
-        ("task_update", "t2", "running"),
-        ("step", None, None),
-        ("task_update", "t2", "done"),
-        ("step", None, None),
-        ("done", None, None),
-    ], f"unexpected sequence: {sequence}"
+    types = [(e["event"], e["data"].get("type")) for e in emitted]
+    assert types == [
+        ("step", "tool_start"),
+        ("step", "tool_end"),
+        ("done", None),
+    ]
 
 
-def test_send_plan_does_not_emit_step_or_task_update():
-    """send_plan itself is a meta-tool — its tool_start/tool_end must not
-    leak through as step/task_update events."""
+def test_send_plan_filtered_as_meta():
+    """send_plan is a meta-tool — its tool_start/tool_end must not leak through."""
     emitted = _run_with_events([
         {"event": "on_tool_start", "name": "send_plan", "data": {"input": {"tasks": []}}},
         {"event": "on_tool_end", "name": "send_plan", "data": {}},
@@ -100,25 +83,15 @@ def test_send_plan_does_not_emit_step_or_task_update():
     assert types == ["done"], f"send_plan leaked: {types}"
 
 
-def test_extra_tool_call_beyond_plan_does_not_crash():
-    """If LLM invokes more business tools than were declared, runner emits
-    step events but stops emitting task_update once the plan is exhausted."""
+def test_send_to_user_filtered_as_meta():
+    """send_to_user is also meta — chart/progress emissions go through the
+    skill closure, runner shouldn't re-emit step events for it."""
     emitted = _run_with_events([
-        {"event": "on_tool_start", "name": "send_plan", "data": {"input": {
-            "tasks": [{"id": "t1", "name": "唯一任务"}]
-        }}},
-        {"event": "on_tool_end", "name": "send_plan", "data": {}},
-        {"event": "on_tool_start", "name": "query_campaign_report", "data": {"input": {}}},
-        {"event": "on_tool_end", "name": "query_campaign_report", "data": {}},
-        # extra tool call — t2 was never declared
-        {"event": "on_tool_start", "name": "build_chart", "data": {"input": {}}},
-        {"event": "on_tool_end", "name": "build_chart", "data": {}},
+        {"event": "on_tool_start", "name": "send_to_user", "data": {"input": {"action": "chart"}}},
+        {"event": "on_tool_end", "name": "send_to_user", "data": {}},
     ])
-    task_updates = [e for e in emitted if e["event"] == "task_update"]
-    steps = [e for e in emitted if e["event"] == "step"]
-    assert len(task_updates) == 2  # t1 running + t1 done only
-    assert all(u["data"]["task_id"] == "t1" for u in task_updates)
-    assert len(steps) == 4  # 2 tools * (start + end)
+    types = [e["event"] for e in emitted]
+    assert types == ["done"]
 
 
 def test_token_stream_passes_through():
@@ -132,12 +105,15 @@ def test_token_stream_passes_through():
     assert emitted[0]["data"] == {"token": "hello"}
 
 
-def test_business_tool_before_plan_does_nothing():
-    """If a business tool fires before send_plan (shouldn't happen but
-    defensive), no task_update is emitted because there's no plan yet."""
+def test_no_task_update_events_emitted():
+    """Append-only model: runner never emits task_update — that whole layer
+    is gone. Frontend infers nothing from these events anymore."""
     emitted = _run_with_events([
+        {"event": "on_tool_start", "name": "send_plan", "data": {"input": {
+            "tasks": [{"id": "t1", "name": "x"}, {"id": "t2", "name": "y"}]
+        }}},
+        {"event": "on_tool_end", "name": "send_plan", "data": {}},
         {"event": "on_tool_start", "name": "query_campaign_report", "data": {"input": {}}},
         {"event": "on_tool_end", "name": "query_campaign_report", "data": {}},
     ])
-    task_updates = [e for e in emitted if e["event"] == "task_update"]
-    assert len(task_updates) == 0
+    assert not any(e["event"] == "task_update" for e in emitted)
