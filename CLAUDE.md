@@ -90,13 +90,51 @@ chat.py             AgentRunner.run()         build_agent()
 
 `config.yaml::agent.interrupt_on` 列敏感工具名（如 `delete_adgroups`）。deepagents 命中后抛 `GraphInterrupt`（或在 `on_chain_end` 输出里塞 `__interrupt__` payload）。
 
-跨请求等待用户确认靠 `channel_registry`：
-1. `POST /api/chat/{user_id}` 创建 channel，注册到 `channel_registry[session_id]`，response header 带 `X-Session-Id`
-2. agent 命中敏感工具 → `channel.wait_for_confirm()` → SSE 推 `event: interrupt` + 阻塞在 `asyncio.Event`
-3. 前端弹确认框，用户点了 → `POST /api/chat/{user_id}/confirm` 带 `session_id`
-4. confirm 端点从 registry 取出 channel，调 `resolve_confirm(approve)` → set event → runner 用 `Command(resume=approve)` 继续 agent
+#### Runner 层统一接口
+所有 channel 共用一个 contract：
 
-不同 SSE 请求是独立 HTTP 连接，确认能跨连接关联**全靠 session_id 在 registry 里的引用**。
+```python
+# api/channel/base.py — abstract，所有 channel 都实现
+async def wait_for_confirm(self, message: str, preview: list) -> bool: ...
+```
+
+`AgentRunner` 不区分 channel 类型，看到 `__interrupt__` 就 `await channel.wait_for_confirm()`。
+
+#### 实现层因 channel 跨连接性而异
+
+| Channel | "等待"机制 | "信号"来源 | 跨连接？ | 用 registry？ |
+|---|---|---|---|---|
+| `CLIChannel` | `input(...)` 阻塞 stdin | 用户在**同一终端**按键 | ❌ 同栈 | ❌ 不需要 |
+| `WebSSEChannel` | `await self._confirm_event.wait()` | 一个**独立的 HTTP 请求** `POST /confirm` 调 `channel.resolve_confirm(approve)` | ✅ 是 | ✅ 必须 |
+
+CLI 的"信号"在同一执行栈里，朴素阻塞即可；WebSSE 的 confirm 请求是独立连接，必须有"反向引用入口"才能找到原 channel 实例的 `_confirm_event`——这就是 `channel_registry` 的唯一职责。
+
+#### `ExternallyConfirmable` Protocol（`api/channel/base.py`）
+
+跨连接确认能力被抽成一个结构化协议（`runtime_checkable Protocol`），而**不是**绑死到某个具体类：
+
+```python
+@runtime_checkable
+class ExternallyConfirmable(Protocol):
+    def resolve_confirm(self, approve: bool) -> None: ...
+```
+
+这样 confirm endpoint 守卫的是**能力**而非**类型**：
+
+```python
+if not isinstance(channel, ExternallyConfirmable):
+    return {"status": "not_supported_on_this_channel"}
+channel.resolve_confirm(req.action == "approve")
+```
+
+`ChannelRegistry.register()` 也用 Protocol 静默过滤——CLI channel 注册是 no-op，只有真正跨连接的 channel 进 dict。**未来加 Slack / WebSocket channel 只要实现 `resolve_confirm`，confirm endpoint 和 registry 零改动**。
+
+#### 端到端跨请求流程（WebSSE）
+
+1. `POST /api/chat/{user_id}` 创建 `WebSSEChannel`，注册到 `channel_registry[session_id]`（registry 自动判 `ExternallyConfirmable`），response header 带 `X-Session-Id`
+2. agent 命中敏感工具 → `channel.wait_for_confirm()` → SSE 推 `event: interrupt` + 阻塞在 `asyncio.Event`
+3. 前端弹确认框 → `POST /api/chat/{user_id}/confirm` 带 `session_id`
+4. confirm 端点从 registry 取出 channel，`isinstance(..., ExternallyConfirmable)` 守卫通过 → `resolve_confirm(approve)` set event → runner 用 `Command(resume=approve)` 继续 agent
 
 ### PLAN_INSTRUCTION 是硬约束（api/chat.py 顶部）
 

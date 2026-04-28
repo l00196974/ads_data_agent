@@ -9,7 +9,12 @@ from agent.config import load_config
 from agent.core import build_agent
 from agent.session import SessionManager
 from agent.user_space import UserSpace
-from api.channel import WebSSEChannel, agent_runner, channel_registry
+from api.channel import (
+    ExternallyConfirmable,
+    WebSSEChannel,
+    agent_runner,
+    channel_registry,
+)
 from api.models import AppendRequest, ChatRequest, ConfirmRequest, SkillCreateRequest
 from skills.system import SYSTEM_SKILLS
 
@@ -137,9 +142,14 @@ async def chat(user_id: str, req: ChatRequest):
 
 @router.post("/{user_id}/confirm")
 async def confirm(user_id: str, req: ConfirmRequest):
+    # Capability check, not class check — any channel that satisfies the
+    # ExternallyConfirmable protocol can be confirmed via this endpoint
+    # (WebSSEChannel today; future Slack/WebSocket channels for free).
     channel = channel_registry.get(req.session_id)
-    if not channel or not isinstance(channel, WebSSEChannel):
+    if not channel:
         return {"status": "not_found"}
+    if not isinstance(channel, ExternallyConfirmable):
+        return {"status": "not_supported_on_this_channel"}
     channel.resolve_confirm(req.action == "approve")
     return {"status": "ok"}
 

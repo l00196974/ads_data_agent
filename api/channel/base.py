@@ -1,5 +1,27 @@
 from abc import ABC, abstractmethod
-from typing import Callable
+from typing import Callable, Protocol, runtime_checkable
+
+
+@runtime_checkable
+class ExternallyConfirmable(Protocol):
+    """Capability protocol: channel supports HitL confirm via an externally
+    delivered signal (e.g. a separate HTTP endpoint, Slack interaction
+    callback, WebSocket frame from a different connection).
+
+    The ``wait_for_confirm()`` coroutine of these channels blocks on an
+    asyncio.Event / Future, and an out-of-band caller invokes
+    ``resolve_confirm(approve)`` to release it.
+
+    Same-stack channels (e.g. CLIChannel that blocks on stdin) do NOT need
+    to satisfy this protocol — their confirm signal arrives in the same
+    coroutine via direct IO.
+
+    Use ``isinstance(channel, ExternallyConfirmable)`` in HTTP / RPC
+    handlers to gate the call: same-stack channels return a clear
+    "not supported" response instead of silently no-op'ing.
+    """
+
+    def resolve_confirm(self, approve: bool) -> None: ...
 
 
 class BaseChannel(ABC):
