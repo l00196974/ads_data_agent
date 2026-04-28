@@ -37,45 +37,78 @@ function login() {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #f0f2f5;
+  background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
 }
 .login-card {
-  background: white;
-  padding: 48px 40px;
-  border-radius: 12px;
-  box-shadow: 0 4px 24px rgba(0,0,0,0.08);
-  width: 360px;
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(10px);
+  padding: 56px 48px;
+  border-radius: 20px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
+  width: 400px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.8);
 }
 .logo {
-  font-size: 22px;
-  font-weight: 600;
-  color: #c7000b;
+  font-size: 26px;
+  font-weight: 700;
+  background: linear-gradient(135deg, #c7000b 0%, #d81a24 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
   text-align: center;
+  letter-spacing: 0.5px;
 }
 .subtitle {
-  color: #888;
+  color: #8c8c8c;
   text-align: center;
-  margin: 0;
+  margin: 0 0 12px;
+  font-size: 15px;
 }
 .input {
-  padding: 10px 14px;
-  border: 1px solid #ddd;
-  border-radius: 6px;
-  font-size: 14px;
+  padding: 14px 18px;
+  border: 1px solid #d9d9d9;
+  border-radius: 12px;
+  font-size: 15px;
   outline: none;
+  transition: all 0.2s ease;
+  font-family: 'Inter', sans-serif;
 }
-.input:focus { border-color: #c7000b; }
+.input:focus {
+  border-color: #c7000b;
+  box-shadow: 0 0 0 3px rgba(199, 0, 11, 0.1);
+}
 .btn-primary {
-  padding: 10px;
-  background: #c7000b;
+  padding: 14px;
+  background: linear-gradient(135deg, #c7000b 0%, #d81a24 100%);
   color: white;
   border: none;
-  border-radius: 6px;
-  font-size: 15px;
+  border-radius: 12px;
+  font-size: 16px;
+  font-weight: 500;
   cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 4px 12px rgba(199, 0, 11, 0.25);
+  margin-top: 8px;
 }
-.btn-primary:disabled { background: #ddd; cursor: not-allowed; }
+.btn-primary:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(199, 0, 11, 0.35);
+}
+.btn-primary:disabled {
+  background: #d9d9d9;
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
+}
+
+@media (max-width: 480px) {
+  .login-card {
+    width: 90%;
+    padding: 40px 28px;
+  }
+}
 </style>
