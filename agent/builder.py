@@ -5,7 +5,6 @@ below), which in turn monkey-patches deepagents' default Summarization
 factory before any `create_deep_agent` call happens.
 """
 from deepagents import create_deep_agent
-from deepagents._models import resolve_model
 from langgraph.store.memory import InMemoryStore
 
 from agent.checkpointer import get_checkpointer
@@ -32,9 +31,9 @@ def build_agent(
     if extra_tools:
         skills = skills + extra_tools
 
-    raw_model = _build_model(cfg)
-    # SummarizationMiddleware 需要 BaseChatModel 实例，而非 "provider:model" 字符串
-    model = resolve_model(raw_model) if isinstance(raw_model, str) else raw_model
+    # _build_model 现在统一返回 BaseChatModel 实例（含 cfg.llm.api_key），
+    # 无需再判断 isinstance / 调 resolve_model。
+    model = _build_model(cfg)
     interrupt_tools = {tool_name: True for tool_name in interrupt_on}
 
     # 业务工具大返回值截断：deepagents 默认只截 write_file/edit_file 的 args，
