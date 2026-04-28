@@ -25,6 +25,3 @@ persistence:
 
 skills:
   system_dir: ./skills/system
-
-sub_agents:
-  system_dir: ./sub_agents/system

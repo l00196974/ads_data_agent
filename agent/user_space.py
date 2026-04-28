@@ -14,7 +14,7 @@ class UserSpace:
         for d in [self.data_dir, self.skills_dir, self.memory_dir]:
             d.mkdir(parents=True, exist_ok=True)
 
-    def get_agents_md(self, system_md_path: str = "config/system_agents.md") -> str:
+    def get_agents_md(self, system_md_path: str = "prompts/system_agent.md") -> str:
         parts = []
         sys_path = Path(system_md_path)
         if sys_path.exists():

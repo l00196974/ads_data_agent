@@ -83,7 +83,7 @@ send_plan(tasks=[...])  →  update_task(t1, "running")  →  业务工具  → 
 每个 `user_id` 一个 `data/{user_id}/` 目录：
 - `skills/` — 用户自定义 skill 的 .py 文件（`POST /api/skills/{user_id}` 写入）
 - `memory/` — 用户记忆
-- `agents.md` — 用户自定义系统指令，被拼到 `config/system_agents.md` 之后
+- `agents.md` — 用户自定义系统指令，被拼到 `prompts/system_agent.md` 之后
 
 注意：`data/{user_id}/skills/*.py` 通过 `GET /api/skills/{user_id}` 可以列出，但 `chat.py::_make_build_fn` 把 `skills=SYSTEM_SKILLS` 写死，**user skills 没有被注入到 agent 的工具集**。改用户 skill 注册逻辑前先确认这是有意还是待补。
 
@@ -117,7 +117,7 @@ send_plan(tasks=[...])  →  update_task(t1, "running")  →  业务工具  → 
 
 - `config.yaml` — 服务端口、CORS、interrupt 工具列表、数据目录。**不含 LLM 配置**
 - `.env` — LLM 配置（API key、provider、model、base_url）；其他敏感变量
-- `config/system_agents.md` — 系统级 agent 角色 prompt（中文，"华为广告数据分析助手"）
+- `prompts/system_agent.md` — 系统级 agent 角色 prompt（中文，"华为广告数据分析助手"）
 - `data/{user_id}/agents.md` — 用户级追加指令
 
 ## 测试约定
