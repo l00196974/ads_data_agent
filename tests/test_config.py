@@ -12,6 +12,8 @@ def test_load_config_defaults():
 
 
 def test_env_override(monkeypatch):
+    # 隔离 dotenv 加载到 os.environ 的 LLM_API_KEY，否则它优先级更高会盖掉断言
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     cfg = load_config("config.yaml")
     assert cfg.llm.api_key == "test-key"

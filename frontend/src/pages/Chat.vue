@@ -138,6 +138,8 @@ const messagesEl = ref(null)
 const currentToken = ref('')
 const streamingThought = ref('')
 const progressText = ref('')
+// conversationId: 同一对话内多轮共享，"新对话"按钮重置为 null（后端会生成新 id）
+const conversationId = ref(localStorage.getItem('conversation_id') || null)
 const planTasks = ref([])
 const tipText = ref('')
 let sseClient = null
@@ -168,7 +170,7 @@ async function sendOrAppend() {
     await fetch(`/api/chat/${userId}/append`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: msg }),
+      body: JSON.stringify({ message: msg, conversation_id: conversationId.value }),
     })
     return
   }
@@ -300,7 +302,12 @@ async function sendOrAppend() {
     })
 
   try {
-    await sseClient.connect({ message: msg })
+    await sseClient.connect({ message: msg, conversation_id: conversationId.value })
+    // 后端可能新生成了 conversation_id（首次发起时），同步到本地
+    if (sseClient.conversationId && sseClient.conversationId !== conversationId.value) {
+      conversationId.value = sseClient.conversationId
+      localStorage.setItem('conversation_id', sseClient.conversationId)
+    }
   } catch (e) {
     if (e.name !== 'AbortError') {
       messages.value.push({
@@ -340,10 +347,14 @@ function clearChat() {
   messages.value = []
   progressText.value = ''
   currentToken.value = ''
+  streamingThought.value = ''
   isStreaming.value = false
   appendHint.value = false
   planTasks.value = []
   tipText.value = ''
+  // 切换 conversationId 为 null：下次发请求时后端会创建新 thread，旧对话历史不参与
+  conversationId.value = null
+  localStorage.removeItem('conversation_id')
 }
 
 function logout() {

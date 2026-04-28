@@ -1,8 +1,10 @@
 export class SSEClient {
   constructor(url, handlers) {
     this.url = url
-    this.handlers = handlers  // { step, token, chart, interrupt, done, error }
+    this.handlers = handlers
     this.abortController = null
+    this.sessionId = null
+    this.conversationId = null
   }
 
   async connect(payload) {
@@ -13,6 +15,9 @@ export class SSEClient {
       body: JSON.stringify(payload),
       signal: this.abortController.signal,
     })
+
+    this.sessionId = resp.headers.get('X-Session-Id')
+    this.conversationId = resp.headers.get('X-Conversation-Id')
 
     const reader = resp.body.getReader()
     const decoder = new TextDecoder()

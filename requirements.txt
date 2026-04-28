@@ -1,6 +1,7 @@
 deepagents
 langgraph
 langgraph-checkpoint
+langgraph-checkpoint-sqlite
 fastapi
 uvicorn[standard]
 python-dotenv

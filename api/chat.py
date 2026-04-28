@@ -98,7 +98,9 @@ def _make_build_fn(user_id: str):
 
 @router.post("/{user_id}")
 async def chat(user_id: str, req: ChatRequest):
+    # ephemeral session_id for HitL confirm lookup; conversation_id 决定 langgraph thread。
     session_id = f"{user_id}_{uuid4().hex[:8]}"
+    conversation_id = req.conversation_id or uuid4().hex[:12]
     queue: asyncio.Queue = asyncio.Queue()
     channel = WebSSEChannel(user_id, session_id, queue)
     channel_registry.register(session_id, channel)
@@ -108,7 +110,7 @@ async def chat(user_id: str, req: ChatRequest):
             channel,
             req.message,
             _make_build_fn(user_id),
-            session_mgr.get_config(user_id),
+            session_mgr.get_config(user_id, conversation_id),
         )
     )
 
@@ -127,6 +129,8 @@ async def chat(user_id: str, req: ChatRequest):
             "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",
             "X-Session-Id": session_id,
+            "X-Conversation-Id": conversation_id,
+            "Access-Control-Expose-Headers": "X-Session-Id, X-Conversation-Id",
         },
     )
 
@@ -149,6 +153,14 @@ async def cancel(user_id: str):
 async def append_message(user_id: str, req: AppendRequest):
     build_fn = _make_build_fn(user_id)
     agent = build_fn()
-    config = session_mgr.get_config(user_id)
+    config = session_mgr.get_config(user_id, req.conversation_id)
     agent.invoke(Command(resume={"additional_context": req.message}), config=config)
     return {"status": "appended", "message": req.message}
+
+
+@router.post("/{user_id}/reset")
+async def reset_conversation(user_id: str):
+    """开启新对话。前端调此 endpoint 拿到一个新的 conversation_id，
+    后续 chat 请求带上它就会进入全新的 langgraph thread。
+    旧对话的 sqlite checkpoint 不删除（按 conversation_id 隔离，互不干扰）。"""
+    return {"conversation_id": uuid4().hex[:12]}

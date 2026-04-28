@@ -1,14 +1,27 @@
+from contextlib import asynccontextmanager
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from pathlib import Path
+from fastapi.staticfiles import StaticFiles
+
 from agent.config import load_config
+from agent.core import close_checkpointer, init_checkpointer
 from api import chat, skills
 
 cfg = load_config()
 
-app = FastAPI(title="Ads Data Agent")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    # AsyncSqliteSaver 必须在事件循环里 init（aiosqlite 是 async）
+    await init_checkpointer()
+    yield
+    await close_checkpointer()
+
+
+app = FastAPI(title="Ads Data Agent", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -16,6 +29,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Session-Id", "X-Conversation-Id"],
 )
 
 app.include_router(chat.router, prefix="/api/chat", tags=["chat"])

@@ -13,6 +13,12 @@ agent:
     - modify_budget
     - pause_campaign
 
+  # 长上下文场景：单 thread 历史超过 trigger_tokens 时自动压缩
+  long_context:
+    summarization_trigger_tokens: 80000   # 80k token 触发自动压缩；32k context 模型建议下调到 20000
+    summarization_keep_messages: 10        # 压缩后保留最近 N 条消息原文
+    tool_output_max_bytes: 5000            # 工具返回值超此字节数则截断（暂未启用）
+
 persistence:
   type: local
   data_dir: ./data
