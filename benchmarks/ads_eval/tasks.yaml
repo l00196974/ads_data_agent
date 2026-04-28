@@ -1,0 +1,76 @@
+# Ads Agent 评测任务库
+#
+# 每条任务包含：
+#   id            唯一标识
+#   category      任务类别（single-choice / multi-choice / report）
+#   difficulty    easy / medium / hard
+#   query         用户的自然语言提问
+#   expected:
+#     tools_must_call:   断言 agent 必须调用了哪些 CLI 子命令（用于 Tool Recall）
+#       - name: <子命令名>
+#         args_must_contain: [可选，命令字符串必须包含的子串列表]
+#     answer_contains:   最终文本里必须出现的子串（用于简易 EM 检查）
+#     answer_numerical:  数值答案精确匹配（可选，与 answer_contains 二选一更严格）
+#     rouge_l_min:       报告类用 ROUGE-L 阈值（暂未实现，先占位）
+#     reference_text:    ROUGE 对比的参考答案（占位）
+#
+# 加题：照葫芦画瓢往下追加即可，不需要改代码。
+# 题库越大评测越稳定；先 3-5 条 demo 跑通，后续逐步扩充到 50-100。
+
+tasks:
+  - id: q001
+    category: single-choice
+    difficulty: easy
+    query: 帮我查一下 2026-03-01 这一天的点击量和曝光量
+    expected:
+      tools_must_call:
+        - name: query-metrics
+          args_must_contain:
+            - "click"
+            - "exposure"
+            - "2026-03-01"
+      answer_contains:
+        - "2026-03-01"
+
+  - id: q002
+    category: single-choice
+    difficulty: easy
+    query: 列出系统支持的所有指标
+    expected:
+      tools_must_call:
+        - name: list-metrics
+      answer_contains:
+        - "click"
+        - "exposure"
+
+  - id: q003
+    category: multi-choice
+    difficulty: medium
+    query: 查 2026-03-01 到 2026-03-03 这三天每天的点击和曝光趋势
+    expected:
+      tools_must_call:
+        - name: query-metrics
+          args_must_contain:
+            - "click"
+            - "exposure"
+            - "day"
+            - "2026-03-01"
+            - "2026-03-03"
+      answer_contains:
+        - "2026-03-01"
+        - "2026-03-03"
+
+  - id: q004
+    category: report
+    difficulty: hard
+    query: 分析最近3天点击趋势，给出洞察并画个折线图
+    expected:
+      tools_must_call:
+        - name: query-metrics
+          args_must_contain:
+            - "click"
+            - "day"
+      # report 类暂时只检查工具调用，文本评估靠 ROUGE（占位待实现）
+      reference_text: |
+        最近3天点击数据呈现一定波动，需关注趋势变化。
+      rouge_l_min: 0.20
