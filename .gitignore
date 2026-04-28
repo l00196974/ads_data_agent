@@ -20,6 +20,7 @@ e2e-test-login
 login-page-*
 chat-*.png
 exec-*.png
+e2e-*.png
 
 # Memory / hook plugin runtime data
 .remember/
