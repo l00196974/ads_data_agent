@@ -56,11 +56,22 @@ class PersistenceConfig(BaseModel):
     data_dir: str = "./data"
 
 
+class SkillsConfig(BaseModel):
+    """业务技能加载配置。
+
+    md_dir: 扫描这个目录下所有子目录，包含 SKILL.md 的会被解析成 langchain tool。
+    每个子目录是一个 skill 包（参考 skills/metric-data-extractor 的结构）。
+    """
+
+    md_dir: str = "./skills"
+
+
 class AppConfig(BaseModel):
     server: ServerConfig = ServerConfig()
     agent: AgentConfig = AgentConfig()
     llm: LLMConfig = LLMConfig()
     persistence: PersistenceConfig = PersistenceConfig()
+    skills: SkillsConfig = SkillsConfig()
 
 
 def load_config(path: str = "config.yaml") -> AppConfig:

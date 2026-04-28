@@ -1,0 +1,11 @@
+node_modules/
+.env
+.env.local
+
+# 忽略真实配置文件（避免覆盖本地配置）
+config/metrics.csv
+config/dimensions.csv
+config/dimension-values.csv
+
+# 保留示例文件
+!config/*.csv.example

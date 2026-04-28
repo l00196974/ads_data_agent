@@ -1,0 +1,5 @@
+{
+  "METRICS_API_URL": "https://wo-drcn.dbankcloud.cn",
+  "HUAWEI_ADS_APP_ID": "your-app-id-here",
+  "HUAWEI_ADS_SECRET": "your-secret-here"
+}

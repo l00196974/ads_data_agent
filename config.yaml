@@ -24,4 +24,7 @@ persistence:
   data_dir: ./data
 
 skills:
-  system_dir: ./skills/system
+  # md_dir 下每个子目录如果包含 SKILL.md，会被识别为一个技能包：
+  # 参考 skills/metric-data-extractor 的结构（SKILL.md + bin/*.js + package.json）
+  # 加新技能 = 把整个目录拷进来，重启后端即可，无需改 Python 代码
+  md_dir: ./skills

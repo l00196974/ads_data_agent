@@ -32,3 +32,9 @@ e2e-*.png
 # Claude Code per-machine settings (share .claude/settings.json, ignore .local)
 .claude/settings.local.json
 
+# Eval outputs（每次跑都会变，靠 results.json.example 当模板）
+benchmarks/*/results.json
+
+# 每实例本地化的 skill 配置（含 API URL / 密钥；.example 是模板）
+skills/*/config.json
+
