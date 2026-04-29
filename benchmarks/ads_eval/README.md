@@ -56,7 +56,7 @@ ROUGE-L 用于报告类暂未实现，已在 `tasks.yaml` 留字段占位。
 
 - **In-process 调用 agent**：直接用 `agent.astream_events`，不走 SSE。优点是快、不用启 uvicorn、每题独立 thread_id（无状态污染）。代价是 SSE 链路本身（runner / WebSSEChannel）不被覆盖——这一层有 unit tests 已经测过。
 - **串行跑**：避免 mock server 并发干扰。如果以后需要并行加速，可以加 semaphore + 给每个题独立 user_id 隔离 mock 数据。
-- **Channel skills 用 stub**：`send_plan` / `send_to_user` 不做 IO，只把调用记录到 captures 里供打分。LLM 看到的工具签名跟生产 WebSSEChannel 完全一致——因为本来就是通过 channel 注入的。
+- **默认 tool 用 stub**：`send_plan`（默认 framework tool）不做实际 IO，只把调用记录到 captures 里供打分。LLM 看到的工具签名跟生产 WebSSEChannel 完全一致——`send_plan` 由 `make_default_tools(channel)` 工厂构造，stub channel 实现不同的 `send_plan` 方法即可。
 
 ## 跟 FDABench 的差异
 

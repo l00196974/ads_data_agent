@@ -48,12 +48,13 @@
                           └──────────────────┘
 ```
 
-关键设计决策（详见 `CLAUDE.md`）：
+关键设计决策（详见 [`docs/`](./docs/) 架构文档体系，特别是 `docs/02-features/`）：
 
-- **Channel 抽象** (`api/channel/`)：同一个 agent 可服务 Web SSE 或 CLI——`send_plan` / `send_to_user` 工具由 channel 注入闭包，业务代码无感
-- **状态控制反转**：runner 监听 `on_tool_start/end` 自动推送 `task_update`，**不**让 LLM 主动调状态工具，避免批量 tool_call 导致"running 一闪而过"
-- **LLM 双协议路由** (`agent/llm.py`)：`base_url` 或 `provider=openai` → `ChatOpenAI`；否则字符串 `"provider:model"` 走 deepagents 原生
-- **持久化**：`AsyncSqliteSaver` + FastAPI lifespan async init；`thread_id = {user_id}_{conversation_id}`
+- **Skill / Tool / Channel 三层模型** (`docs/02-features/01-skill-tool-channel-model.md`)：framework 默认 tool（含 `send_plan` / `task` 等）+ SKILL.md 业务 skill（聚合到 `run_command`）+ Channel 通信契约——三者职责分离，agent 视角对 channel 切换透明
+- **状态控制反转**：runner 监听 `on_tool_start/end` 推送 step 事件，**append-only**（不再有 `task_update`），LLM 不感知任务状态
+- **SubAgent 长上下文主方案** (`docs/02-features/07-subagent-driven-context.md`)：主 Agent 派子 Agent 干脏活，子 Agent 独立 context 跑完只回摘要；Summarization 是兜底
+- **LLM 双协议路由** (`agent/llm.py`)：`base_url` 或 `provider=openai` → `ChatOpenAI`；否则走 deepagents 原生 `init_chat_model`
+- **持久化**：`AsyncSqliteSaver`（checkpoint）+ `AsyncSqliteStore`（store，默认）+ FastAPI lifespan async init；`thread_id = {user_id}_{conversation_id}`
 
 ---
 
@@ -188,21 +189,26 @@ ads_data_agent/
 │   └── channel/               传输适配 (Web SSE / CLI)
 │       ├── base.py registry.py runner.py web_sse.py cli.py
 │
-├── skills/system/             业务工具 (LLM tools)
-│   └── {campaign_report, budget_analysis, anomaly_detection, chart_skill}.py
+├── skills/                    业务 SKILL.md 包目录（框架不内置任何业务 skill）
+│   └── <skill-name>/          每个子目录含 SKILL.md + package.json::bin + bin/*.{js,py,sh}
 │
 ├── prompts/                   prompt 模板
 │   └── system_agent.md
 │
-├── tests/unit/                按源码结构镜像
-│   ├── agent/  api/  skills/
+├── tests/unit/                按源码结构镜像（agent/ + api/）
 │
-├── scripts/                   验证脚本（持久可重跑）
+├── scripts/                   验证脚本（持久可重跑，真打 LLM）
 │   ├── verify_p0_e2e.py
 │   ├── stress_long_context.py
 │   └── validate_summarization.py
 │
-├── docs/plans/                设计/实施规划文档
+├── docs/                      架构文档体系（评审 / 对接读这里）
+│   ├── 01-overview/           总览
+│   ├── 02-features/           功能专题（每篇文末附 ADR）
+│   ├── 03-api-reference/      接口契约
+│   ├── 04-operations/         部署 / 配置 / 观测 / 测试策略
+│   ├── 05-known-issues-and-roadmap/
+│   └── plans/archive/         历史 plan（已过时，仅作时间线）
 │
 ├── data/                      运行时数据（gitignored）
 │   ├── checkpoints.db         Sqlite checkpointer
@@ -216,10 +222,13 @@ ads_data_agent/
 
 ## 已知限制 / 后续路线
 
-- **LLM provider 端 prompt caching**：火山方舟 ARK + GLM 系列**不实现**自动 prompt caching（实测 `cache_read=0`）；OpenAI 自家、DeepSeek、Anthropic Claude 都自动支持
-- **进程内 InMemoryStore**：deepagents 的 store 仍是单进程内存，多副本部署会失同步；要水平扩展时把 `agent/builder.py::_store` 换成持久后端
-- **`channel_registry` 是模块级 dict**：多 worker 部署时 HitL confirm 请求可能落到没注册过的实例；要支持时把 registry 换成 Redis
-- **业务工具是 mock**：`skills/system/*.py` 当前返 mock 数据，加 800ms / 300ms async sleep 模拟延迟。接真实数据库时把异步 IO 换成 SQL/HTTP 即可
+完整问题清单与路线图见 [`docs/05-known-issues-and-roadmap/`](./docs/05-known-issues-and-roadmap/)。摘要：
+
+- **`RedisChannelRegistry` 待实现**：当前 `InMemoryChannelRegistry` 是默认（单 worker），`RedisChannelRegistry` stub 已留接入点（含 docstring 设计方案），多 worker 部署前必须实现
+- **`MysqlStore` 待实现**：`AsyncSqliteStore` 是默认，`mysql` backend stub 同上
+- **认证缺失**：`user_id` 透传 mock 阶段，未接 SSO/JWT
+- **业务 skill 是部署侧资产**：框架不内置任何业务 skill，`skills.md_dir` 下扫描的 SKILL.md 包决定 agent 实际能力——例如 `metric-data-extractor` 在当前环境依赖外部 mock 数据服务，部署到生产时需替换为真实数据源
+- **LLM provider prompt caching 差异**：暂未深入对比，后续可能切其它供应商再处理
 
 ---
 
