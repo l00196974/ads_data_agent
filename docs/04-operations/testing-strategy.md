@@ -156,53 +156,56 @@ benchmarks/
 
 ## 五、依赖管理
 
-### 5.1 测试依赖**不在** `requirements.txt`
+仓库提供三个 requirements 文件，按场景组合：
 
-`pytest` / `pytest-asyncio` 等 dev 依赖目前**不在**主 `requirements.txt`——
-重建 venv 后需要按需手动装：
+| 文件 | 内容 | 用法 |
+|---|---|---|
+| `requirements.txt` | 生产 runtime 必需 | `pip install -r requirements.txt` |
+| `requirements-dev.txt` | pytest 等 dev / 测试工具 | `pip install -r requirements-dev.txt` |
+| `requirements-providers.txt` | 可选 LLM provider（注释形式，按需取消） | 编辑后 `pip install -r requirements-providers.txt` |
 
-```bash
-.venv/Scripts/pip install pytest pytest-asyncio
-```
-
-### 5.2 LLM provider 依赖也不全
-
-`langchain-anthropic` / `langchain-google-genai` 等可选 provider 也不在 `requirements.txt`，
-按用到的厂商单独装：
+### 5.1 测试依赖
 
 ```bash
-.venv/Scripts/pip install langchain-anthropic    # 用 Claude 直连时
-.venv/Scripts/pip install langchain-google-genai # 用 Gemini 时
+.venv/Scripts/pip install -r requirements.txt -r requirements-dev.txt
 ```
 
-### 5.3 Roadmap
+含 `pytest` / `pytest-asyncio`。
 
-应建 `requirements-dev.txt` 把 dev 依赖固化下来，且加上常用 provider 的可选依赖。
-见 [roadmap.md::P2](../05-known-issues-and-roadmap/roadmap.md)。
+### 5.2 LLM provider 依赖
+
+`requirements-providers.txt` 默认全部注释——按用到的厂商取消注释再装。
+默认走 OpenAI 兼容协议（`langchain-openai` 在主 requirements 里）就够。
+
+直连 Anthropic / Google 等需要单独装：
+
+```bash
+.venv/Scripts/pip install langchain-anthropic       # 用 Claude 直连
+.venv/Scripts/pip install langchain-google-genai    # 用 Gemini
+```
+
+详见 [configuration-reference.md::3.1 厂商对照示例](./configuration-reference.md)。
 
 ---
 
-## 六、CI（暂未配置）
+## 六、CI（GitHub Actions）
 
-当前没有自动化 CI——每次 commit 后人工跑 `pytest tests/` 验证。
+`.github/workflows/test.yml` 已配置两个 job：
 
-最小可行 CI（未实施）：
+| Job | 内容 | 触发 |
+|---|---|---|
+| `backend-tests` | `pip install -r requirements.txt -r requirements-dev.txt` + `pytest tests/ -v` | push / PR / workflow_dispatch |
+| `frontend-build` | `npm ci` + `npm run build`（含 lint by Vite） | 同上 |
 
-```yaml
-# .github/workflows/test.yml（草稿）
-on: [push, pull_request]
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: { python-version: '3.13' }
-      - run: pip install -r requirements.txt pytest pytest-asyncio
-      - run: pytest tests/ -v
-      - uses: actions/setup-node@v4
-        with: { node-version: '20' }
-      - run: cd frontend && npm ci && npm run build
+**默认不接入 E2E 测试**（`scripts/`）——它们会真打 LLM 消耗 token，CI 不可控。
+
+PR ladder 建议：lint → unit test → frontend build → 合并允许。
+
+启用：仓库推到 GitHub 后自动生效。本地预览 workflow 行为可用 [`act`](https://github.com/nektos/act)：
+
+```bash
+act -j backend-tests
+act -j frontend-build
 ```
 
 ---

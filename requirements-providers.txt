@@ -1,0 +1,21 @@
+# 可选 LLM Provider 依赖
+# 用法：按用到的厂商单独装，例如 .venv/Scripts/pip install langchain-anthropic
+#
+# 不全部进 requirements.txt 的理由：
+# - 全装会拉一堆传递依赖（langchain-aws 拉 boto3、langchain-google-genai 拉 google-cloud-* 等）
+# - 部署侧通常只用一两个 provider，没必要装全套
+# - LLM_BASE_URL + LLM_PROVIDER=openai 这条路径只需要 langchain-openai（已在 requirements.txt）
+#
+# 选用建议见 docs/04-operations/configuration-reference.md::3.1 厂商对照示例。
+
+# Anthropic 直连
+# langchain-anthropic>=0.3
+
+# Google Gemini
+# langchain-google-genai>=2.0
+
+# AWS Bedrock
+# langchain-aws>=0.2
+
+# Cohere
+# langchain-cohere>=0.3

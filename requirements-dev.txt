@@ -1,0 +1,15 @@
+# 开发 / 测试依赖（不在生产 runtime 必需）
+# 用法：.venv/Scripts/pip install -r requirements.txt -r requirements-dev.txt
+#
+# 与 requirements.txt 分离的理由：
+# - 生产镜像不需要装 pytest 等测试工具，减少镜像体积
+# - 配 CI 时单独装 dev 依赖，构建步骤更清晰
+# - 上线前 audit 依赖时能区分"代码运行时用"vs"开发时才用"
+
+# 测试框架
+pytest>=8.0
+pytest-asyncio>=0.23
+
+# Lint / 格式化（暂未强制启用，加在这里方便未来接入 CI）
+# ruff>=0.4
+# mypy>=1.10

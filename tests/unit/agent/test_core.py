@@ -77,6 +77,43 @@ def test_build_agent_subagents_none_when_empty():
         assert mock_create.call_args.kwargs["subagents"] is None
 
 
+def test_validate_interrupt_on_warns_on_unknown_tool_name(caplog):
+    """interrupt_on 配错（填子命令名而非 LangChain tool name）应 warn，不 fail-fast。
+    这个守住 A3 known issue：避免敏感操作配置形同虚设而无报错。"""
+    import logging
+    from agent.builder import _validate_interrupt_on
+    fake_tool = MagicMock()
+    fake_tool.name = "run_command"
+    with caplog.at_level(logging.WARNING, logger="agent.builder"):
+        _validate_interrupt_on(["delete-adgroup", "modify_budget"], [fake_tool])
+    assert any("不在已加载工具集" in rec.message for rec in caplog.records)
+    assert "delete-adgroup" in caplog.records[0].message
+    assert "modify_budget" in caplog.records[0].message
+
+
+def test_validate_interrupt_on_silent_when_all_known():
+    """已知工具名（自己的 + deepagents 默认）不该 warn。"""
+    import logging
+    from agent.builder import _validate_interrupt_on
+    fake_tool = MagicMock()
+    fake_tool.name = "run_command"
+    # task 是 deepagents 默认工具白名单内
+    logger = logging.getLogger("agent.builder")
+    with patch.object(logger, "warning") as mock_warn:
+        _validate_interrupt_on(["run_command", "task"], [fake_tool])
+    mock_warn.assert_not_called()
+
+
+def test_validate_interrupt_on_no_op_when_empty():
+    """空 interrupt_on 列表不该触发任何检查 / warn。"""
+    import logging
+    from agent.builder import _validate_interrupt_on
+    logger = logging.getLogger("agent.builder")
+    with patch.object(logger, "warning") as mock_warn:
+        _validate_interrupt_on([], [])
+    mock_warn.assert_not_called()
+
+
 def test_build_model_openai_protocol(monkeypatch):
     from agent.config import AppConfig, LLMConfig
     from agent.core import _build_model
