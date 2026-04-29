@@ -24,34 +24,9 @@ class WebSSEChannel(BaseChannel):
         await self._queue.put(f"event: progress\ndata: {data}\n\n")
 
     def get_skill(self):
-        channel = self
-
-        async def send_to_user(
-            action: str = "chart",
-            chart_type: str = "bar",
-            title: str = "",
-            x_data: list = [],
-            series: list = [],
-        ) -> str:
-            """渲染交互图表到 Web 聊天界面（仅在数据明显需要可视化时调用）。
-
-            参数：
-            - action: 固定为 "chart"
-            - chart_type: bar（柱状图）| line（折线图）| pie（饼图）| scatter（散点图）
-            - title: 图表标题
-            - x_data: X 轴标签列表，如 ["渠道A", "渠道B"]
-            - series: 数据系列列表，每项 {"name": "RPM", "data": [10.2, 8.5]}
-
-            注意：进度提示 / 任务规划无需调用——前端会根据工具执行自动展示进度。
-            """
-            data = json.dumps(
-                {"component": chart_type, "title": title, "x_data": x_data, "series": series},
-                ensure_ascii=False,
-            )
-            await channel._queue.put(f"event: render\ndata: {data}\n\n")
-            return "ok"
-
-        return [send_to_user]
+        # 不再注入任何展示型工具——LLM 直接在 markdown 文本里嵌 ```chart``` 代码块，
+        # 前端解析渲染，省一整轮 LLM round trip。
+        return []
 
     async def wait_for_confirm(self, message: str, preview: list) -> bool:
         # 每次进 wait 前先重置——防止上一次遗留的 set 状态让本次立即返回脏值

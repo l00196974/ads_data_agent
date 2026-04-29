@@ -63,16 +63,19 @@
             <div v-if="msg.type === 'text' && msg.role === 'user'" class="bubble user">
               <div class="bubble-text">{{ msg.content }}</div>
             </div>
-            <!-- AI 文本：直接平铺到页面，无气泡 -->
-            <div
-              v-else-if="msg.type === 'text'"
-              class="ai-response markdown-body"
-              v-html="renderMd(msg.content)"
-            />
-            <!-- 图表：保留卡片容器（图表渲染需要明确边界） -->
-            <div v-else-if="msg.type === 'chart'" class="bubble chart-bubble">
-              <ChartWidget :config="msg.content" />
-            </div>
+            <!-- AI 回答：text + chart 块混排（图表来自 markdown ```chart``` 代码块） -->
+            <template v-else-if="msg.type === 'text'">
+              <template v-for="(block, j) in parseAiContent(msg.content)" :key="j">
+                <div
+                  v-if="block.type === 'text'"
+                  class="ai-response markdown-body"
+                  v-html="renderMd(block.content)"
+                />
+                <div v-else class="bubble chart-bubble">
+                  <ChartWidget :config="block.config" />
+                </div>
+              </template>
+            </template>
             <!-- 思考过程：append-only 日志，可折叠 -->
             <div v-else-if="msg.type === 'thinking'" class="thinking-group">
               <div class="thinking-summary" @click="msg.collapsed = !msg.collapsed">
@@ -177,6 +180,41 @@ function summarizeThinking(entries) {
   if (!names.length) return `${entries.length} 步`
   if (names.length <= 3) return names.join(' → ')
   return `${names.slice(0, 3).join(' → ')} → +${names.length - 3}`
+}
+
+// 把 AI 回答的 markdown 文本拆成 text / chart 块。LLM 的图表通过
+// ```chart {...JSON...} ``` 代码块嵌入正文，前端在这里解析出来，避免一次单独的
+// send_to_user round trip。流式过程中不完整的 ```chart 块会被先隐藏，等闭合后渲染。
+function parseAiContent(content) {
+  const blocks = []
+  const re = /```chart\s*\n([\s\S]*?)\n```/g
+  let lastEnd = 0
+  for (const m of content.matchAll(re)) {
+    if (m.index > lastEnd) {
+      blocks.push({ type: 'text', content: content.slice(lastEnd, m.index) })
+    }
+    try {
+      const raw = JSON.parse(m[1])
+      blocks.push({ type: 'chart', config: normalizeChartConfig(raw) })
+    } catch (_) {
+      blocks.push({ type: 'text', content: m[0] })
+    }
+    lastEnd = m.index + m[0].length
+  }
+  // 处理流式中途未闭合的 ```chart——隐藏它直到 ``` 闭合到达
+  let trailing = content.slice(lastEnd)
+  const unclosed = trailing.indexOf('```chart')
+  if (unclosed >= 0) trailing = trailing.slice(0, unclosed)
+  if (trailing) blocks.push({ type: 'text', content: trailing })
+  return blocks
+}
+
+// LLM 给的扁平结构 → ChartWidget 期望的形状
+function normalizeChartConfig(raw) {
+  const type = raw.type || raw.chart_type || 'bar'
+  const xData = raw.x_data || raw.x || []
+  const series = (raw.series || []).map(s => ({ name: s.name, type: s.type || type, data: s.data }))
+  return { type, title: raw.title || '', xAxis: { data: xData }, series }
 }
 
 async function refreshSkills() {
@@ -317,26 +355,9 @@ async function sendOrAppend() {
         }
         scrollToBottom()
       },
-      render: (data) => {
-        closeStreaming()
-        closeThinking()
-        messages.value.push({ role: 'assistant', type: 'chart', content: {
-          type: data.component,
-          title: data.title,
-          xAxis: { data: data.x_data },
-          series: data.series.map(s => ({ name: s.name, type: data.component, data: s.data })),
-        }})
-        scrollToBottom()
-      },
       progress: (data) => {
         // progress 不进消息流，仅在顶部状态栏短暂展示
         progressText.value = data.message
-      },
-      chart: (data) => {
-        closeStreaming()
-        closeThinking()
-        messages.value.push({ role: 'assistant', type: 'chart', content: data })
-        scrollToBottom()
       },
       interrupt: (data) => {
         closeStreaming()

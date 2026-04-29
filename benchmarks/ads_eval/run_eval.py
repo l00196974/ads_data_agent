@@ -52,30 +52,10 @@ from benchmarks.ads_eval.scorers import (  # noqa: E402
 )
 
 
-def _make_eval_channel_skills(captures: dict) -> list:
-    """提供 send_to_user 的 stub 实现，捕获调用而不做 IO。
-
-    LLM 看到的 tool 签名 + docstring 跟 WebSSEChannel 完全一致——保证 agent
-    行为不会因为 channel 类型变化而漂移。
-    """
-    async def send_to_user(
-        action: str = "chart",
-        chart_type: str = "bar",
-        title: str = "",
-        x_data: list = None,
-        series: list = None,
-    ) -> str:
-        """渲染交互图表（仅 action="chart"）。chart_type / title / x_data / series 同 Web 端。"""
-        captures["outputs"].append({
-            "action": action,
-            "chart_type": chart_type,
-            "title": title,
-            "x_data": x_data or [],
-            "series": series or [],
-        })
-        return "ok"
-
-    return [send_to_user]
+def _make_eval_channel_skills(_captures: dict) -> list:
+    """跟生产 channel 一致——不再注入展示型工具。图表通过 markdown ```chart``` 块
+    嵌在最终回答里，由前端解析（评测里直接出现在 final_text，answer_contains 能 cover）。"""
+    return []
 
 
 async def _run_task(task: dict, cfg, md_pkg, user_id: str) -> dict:

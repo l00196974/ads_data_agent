@@ -34,15 +34,7 @@ from agent.user_space import UserSpace  # noqa: E402
 from api.chat import PLAN_INSTRUCTION  # noqa: E402
 
 
-async def _stub_send_to_user(
-    action: str = "chart",
-    chart_type: str = "bar",
-    title: str = "",
-    x_data: list = None,
-    series: list = None,
-) -> str:
-    """渲染图表（profile stub，不做 IO）。"""
-    return "ok"
+"""图表已改成 markdown ```chart``` 内联，channel 不再注入展示工具——profile 也保持空。"""
 
 
 async def profile_one(query: str, user_id: str, with_skills: bool) -> dict:
@@ -75,7 +67,7 @@ async def profile_one(query: str, user_id: str, with_skills: bool) -> dict:
             breakdown["registered_commands"].extend(s.get("commands", []))
 
     skills = list(md_pkg.tools) if md_pkg else []
-    extra_tools = [_stub_send_to_user]
+    extra_tools = []
 
     mark("build_start")
     agent = build_agent(

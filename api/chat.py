@@ -35,11 +35,19 @@ PLAN_INSTRUCTION = """## 执行流程（严格遵守）
 2. **业务工具全部执行完毕后，直接以 Markdown 文本输出最终分析结果**——
    系统会把你的文字逐 token 流式推送到前端。
 
-3. **（可选）需要展示图表时，紧跟在 Markdown 文本之后调用：**
+3. **（可选）需要展示图表时，把图表作为 markdown 代码块嵌进文本里**，
+   语言标识用 `chart`，内容是一段 JSON：
+
+   ~~~
+   ```chart
+   {"type": "line", "title": "点击趋势", "x_data": ["...", "..."], "series": [{"name": "click", "data": [123, 456]}]}
    ```
-   send_to_user(action="chart", chart_type="line", title="...", x_data=[...], series=[...])
-   ```
-   `chart_type`: `bar` | `line` | `pie` | `scatter`。最多 1-2 个图表。
+   ~~~
+
+   - `type`: `bar` | `line` | `pie` | `scatter`
+   - `x_data`: X 轴标签数组（pie 图忽略）
+   - `series`: 每项 `{"name": "...", "data": [...]}`
+   - **不要为图表单独调用任何工具**——前端会扫 markdown 里的 ```chart``` 代码块自动渲染
 
 4. **（可选）最后再输出一行 Markdown 引导追问**（如"如需下钻分析某渠道..."）。
 
@@ -47,7 +55,7 @@ PLAN_INSTRUCTION = """## 执行流程（严格遵守）
 
 - ❌ 不要在工具调用之前 / 之间输出"我现在要查询..."、"接下来..."这种散文
 - ❌ 不要重复声明你要做什么——直接做即可。前端会自动展示工具执行进度
-- ❌ 不要调用任何"宣告 / 进度"性质的工具——这些都是纯展示开销，浪费一整次 LLM round trip
+- ❌ 不要调用任何"宣告 / 进度 / 图表"性质的工具——浪费一整次 LLM round trip
 
 ## 标准示例
 
@@ -55,13 +63,18 @@ PLAN_INSTRUCTION = """## 执行流程（严格遵守）
 
 1. `run_command(command="query-metrics --metrics click --start-date 2026-04-21 --end-date 2026-04-27 --time-mode event --dimensions day")`
 2. 直接输出 Markdown：
-```
+
+~~~
 **最近7天点击趋势**
 - 总点击：xxx
 - 日均：xxx
+
+```chart
+{"type": "line", "title": "点击趋势", "x_data": ["04-21","04-22","04-23","04-24","04-25","04-26","04-27"], "series": [{"name": "click", "data": [120,135,128,150,162,158,170]}]}
 ```
-3. `send_to_user(action="chart", chart_type="line", title="点击趋势", x_data=[...], series=[...])`
-4. 直接输出："如需下钻分析某渠道，请告诉我。"
+
+如需下钻分析某渠道，请告诉我。
+~~~
 """
 
 

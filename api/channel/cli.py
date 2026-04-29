@@ -13,24 +13,9 @@ class CLIChannel(BaseChannel):
         print(f"[进度] {message}")
 
     def get_skill(self):
-        async def send_to_user(
-            action: str = "chart",
-            chart_type: str = "bar",
-            title: str = "",
-            x_data: list = [],
-            series: list = [],
-        ) -> str:
-            """渲染图表（CLI 模式打印数据摘要表）。
-
-            action 固定 "chart"；chart_type / title / x_data / series 同 Web 端语义。
-            """
-            print(f"\n[图表: {title}]")
-            for s in series:
-                for label, val in zip(x_data, s.get("data", [])):
-                    print(f"  {label}: {val}")
-            return "ok"
-
-        return [send_to_user]
+        # 同 WebSSEChannel：图表内联 markdown，无需展示型工具。
+        # CLI 拿到 ```chart``` 块时会以原始 JSON 文本打印，方便调试。
+        return []
 
     async def wait_for_confirm(self, message: str, preview: list) -> bool:
         print(f"\n[需要确认] {message}")
