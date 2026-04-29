@@ -8,7 +8,6 @@ from fastapi.staticfiles import StaticFiles
 
 from agent.config import load_config
 from agent.core import close_checkpointer, init_checkpointer
-from agent.mock_supervisor import start_skill_mocks, stop_skill_mocks
 from agent.user_space import UserSpace
 from api import chat, skills
 
@@ -19,12 +18,7 @@ cfg = load_config()
 async def lifespan(_app: FastAPI):
     # AsyncSqliteSaver 必须在事件循环里 init（aiosqlite 是 async）
     await init_checkpointer()
-    # mock 服务只在显式 opt-in 时跑。生产 / 已有真后端的环境保持默认 false，
-    # 否则 spawn 时缺 npm 依赖（express 等）会直接抛错。
-    if cfg.skills.auto_start_mocks:
-        await start_skill_mocks(cfg.skills.md_dir)
     yield
-    await stop_skill_mocks()
     await close_checkpointer()
 
 

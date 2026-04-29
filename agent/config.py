@@ -60,15 +60,11 @@ class SkillsConfig(BaseModel):
     """业务技能加载配置。
 
     md_dir: 扫描这个目录下所有子目录，包含 SKILL.md 的会被解析成 langchain tool。
-    每个子目录是一个 skill 包（参考 skills/metric-data-extractor 的结构）。
-
-    auto_start_mocks: 是否在 lifespan 启动时自动 spawn 各 skill 包里的
-    `mock/mock-server.js`。**默认 false**——生产 / 已有真实后端的环境不该跑
-    mock；本地纯离线 dev 把它显式设 true 即可。
+    每个子目录是一个 skill 包：SKILL.md + package.json::bin + bin/*.js|*.py|*.sh。
+    框架不内置业务技能，由部署方按规范放入。
     """
 
     md_dir: str = "./skills"
-    auto_start_mocks: bool = False
 
 
 class AppConfig(BaseModel):

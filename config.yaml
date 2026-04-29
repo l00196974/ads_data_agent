@@ -25,11 +25,8 @@ persistence:
 
 skills:
   # md_dir 下每个子目录如果包含 SKILL.md，会被识别为一个技能包：
-  # 参考 skills/metric-data-extractor 的结构（SKILL.md + bin/*.js + package.json）
-  # 加新技能 = 把整个目录拷进来，重启后端即可，无需改 Python 代码
+  # 标准结构：SKILL.md（frontmatter + Markdown 用法文档）+ package.json（bin 字段
+  # 映射子命令 → 脚本路径）+ bin/*.js|*.py|*.sh（实际可执行）。
+  # 框架不内置任何业务技能——部署时把你的 skill 包整个拷进 md_dir，重启后端即可，
+  # 无需改 Python 代码。
   md_dir: ./skills
-
-  # 是否在 lifespan 启动时自动 spawn 各 skill 包里的 mock/mock-server.js。
-  # 默认 false——生产 / 已有真后端的环境别开（缺 npm 依赖会启动失败）。
-  # 纯本地离线 dev 才设 true。
-  auto_start_mocks: false

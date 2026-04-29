@@ -61,7 +61,7 @@ ROUGE-L 用于报告类暂未实现，已在 `tasks.yaml` 留字段占位。
 ## 跟 FDABench 的差异
 
 我们这是**广告域专用**评测：
-- 题库基于 `metric-data-extractor` 的 mock 数据手工构造
+- 题库基于部署方放进 `skills.md_dir` 的真实/mock 业务 skill 手工构造（框架不内置 skill）
 - 不评估多模态（PDF/音频/视频）——业务里用不到
 - 不引入 SQL 执行器 / 文件解析器等通用工具
 

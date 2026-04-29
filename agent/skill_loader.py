@@ -8,18 +8,19 @@ LLM 看到的是 SKILL.md 原汁原味的 CLI 用法，调用时按 shell 习惯
 就被识别为一个技能包。loader 读 frontmatter 拿元信息，读 `package.json::bin`
 （或回退到 `bin/` 目录扫描）拿可执行子命令清单，并把 SKILL.md 正文拼进 system prompt。
 
-技能包目录结构（参考 skills/metric-data-extractor）：
+技能包标准目录结构：
 
     skill-name/
       SKILL.md              # frontmatter 描述 + Markdown 用法文档（LLM 看到的）
-      package.json          # 含 bin 字段映射子命令名 → 脚本路径
+      package.json          # 含 bin 字段映射子命令名 → 脚本路径（可选）
       bin/                  # 实际可执行脚本（任意语言：node/python/bash）
-        query-metrics.js
+        <subcommand>.js
         ...
-      config/               # 技能私有配置（CSV 等）
-      node_modules/         # 已安装的依赖
+      config/               # 技能私有配置（CSV / JSON 等，按需）
+      node_modules/         # 已安装的依赖（如果是 Node skill）
 
-加新技能：把整个目录拷到 skills/ 下，重启 agent 后端即可，**无需改 Python**。
+框架本身**不内置任何业务技能**。部署时把整个 skill 包目录拷到 skills.md_dir 下，
+重启 agent 后端即可，**无需改 Python**。
 
 安全模型：
 - run_command 只能跑已注册的子命令名（来自各 SKILL.md 的 package.json::bin）
