@@ -14,6 +14,31 @@ def _is_meta_tool(name: str) -> bool:
     return name.startswith("send_")
 
 
+def _format_tool_label(tool_name: str, input_data) -> str:
+    """前端展示用的工具名。
+
+    `run_command` 是 SKILL.md 系统统一的派发器，工具名本身不可读——LLM 实际
+    在调的"子命令"才是有意义的（query-metrics / list-metrics / ...）。从
+    input.command 第一个 token 取出来当显示名，让用户看到"在跑哪个 skill 命令"。
+
+    其他业务工具按原名 + 第一个短参数显示。"""
+    if not isinstance(input_data, dict) or not input_data:
+        return tool_name
+
+    if tool_name == "run_command":
+        cmd = input_data.get("command", "")
+        if isinstance(cmd, str) and cmd.strip():
+            subcmd = cmd.strip().split(maxsplit=1)[0]
+            return subcmd or tool_name
+        return tool_name
+
+    first_key = next(iter(input_data.keys()))
+    first_val = input_data[first_key]
+    if isinstance(first_val, str) and len(first_val) < 30:
+        return f"{tool_name}: {first_val}"
+    return tool_name
+
+
 async def _resume_safely(agent, approve: bool, config: dict) -> None:
     """resume 期间收到 cancel 不能直接打断 ainvoke——会让 langgraph 写到一半就停，
     checkpointer 留下半完成 state，下一轮 restart 读到 corrupt 状态。
@@ -68,17 +93,14 @@ class AgentRunner:
                         continue
                     business_tools_started += 1
                     input_data = event.get("data", {}).get("input", {})
-                    step_msg = tool_name
-                    if isinstance(input_data, dict) and input_data:
-                        first_key = next(iter(input_data.keys()))
-                        if isinstance(input_data[first_key], str) and len(input_data[first_key]) < 30:
-                            step_msg += f": {input_data[first_key]}"
+                    step_msg = _format_tool_label(tool_name, input_data)
                     await channel.send_step(step_msg, "tool_start")
                 elif kind == "on_tool_end":
                     tool_name = event.get("name", "tool")
                     if _is_meta_tool(tool_name):
                         continue
-                    await channel.send_step(tool_name, "tool_end")
+                    input_data = event.get("data", {}).get("input", {})
+                    await channel.send_step(_format_tool_label(tool_name, input_data), "tool_end")
                 elif kind == "on_chain_end":
                     outputs = event.get("data", {}).get("output", {})
                     if isinstance(outputs, dict) and "__interrupt__" in outputs:

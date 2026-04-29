@@ -78,7 +78,7 @@
               <div class="thinking-summary" @click="msg.collapsed = !msg.collapsed">
                 <span class="thinking-toggle">{{ msg.collapsed ? '▶' : '▼' }}</span>
                 <span class="thinking-label">
-                  思考过程<span v-if="msg.collapsed">（{{ msg.entries.length }} 步）</span>
+                  思考过程<span v-if="msg.collapsed">：{{ summarizeThinking(msg.entries) }}</span>
                 </span>
               </div>
               <div v-if="!msg.collapsed" class="thinking-entries">
@@ -167,6 +167,16 @@ let sseClient = null
 function renderMd(content) {
   const rawHtml = marked.parse(content)
   return DOMPurify.sanitize(rawHtml)
+}
+
+// 折叠态展示已发生的工具调用名（去掉"执行中..."后缀），让用户一眼看到调过哪些 skill
+function summarizeThinking(entries) {
+  const names = entries
+    .filter(e => e.kind === 'running' || e.kind === 'done')
+    .map(e => e.label.replace(/\s*执行中\.\.\.$/, ''))
+  if (!names.length) return `${entries.length} 步`
+  if (names.length <= 3) return names.join(' → ')
+  return `${names.slice(0, 3).join(' → ')} → +${names.length - 3}`
 }
 
 async function refreshSkills() {
@@ -339,10 +349,8 @@ async function sendOrAppend() {
       },
       done: () => {
         closeStreaming()
-        // 折叠最近一个思考分组（如果还在活跃）
-        if (currentThinkingIdx.value !== null) {
-          messages.value[currentThinkingIdx.value].collapsed = true
-        }
+        // 不再 done 时自动折叠——用户需要看到调用了哪些工具，不然会以为
+        // 模型啥都没干。要折叠用户自己点 ▼。
         closeThinking()
         isStreaming.value = false
         progressText.value = ''
