@@ -761,8 +761,8 @@ function logout() {
   gap: 4px;
 }
 .thinking-entry {
-  font-size: 12.5px;
-  line-height: 1.6;
+  font-size: 13px;
+  line-height: 1.65;
   color: #595959;
 }
 .thinking-entry.entry-running {
@@ -773,7 +773,10 @@ function logout() {
   font-weight: 500;
 }
 .entry-label {
-  word-break: break-all;
+  /* CLI 命令通常很长，break-word 在 token 边界换行（保留命令可读性）；
+     break-all 会从中间硬截断字符，看起来像乱码。 */
+  word-break: break-word;
+  overflow-wrap: anywhere;
   font-family: ui-monospace, SFMono-Regular, "Cascadia Mono", Menlo, monospace;
 }
 

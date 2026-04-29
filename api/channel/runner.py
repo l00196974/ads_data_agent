@@ -15,28 +15,32 @@ def _is_meta_tool(name: str) -> bool:
 
 
 def _format_tool_label(tool_name: str, input_data) -> str:
-    """前端展示用的工具名。
+    """前端展示用的工具名 + 实际参数。
 
-    `run_command` 是 SKILL.md 系统统一的派发器，工具名本身不可读——LLM 实际
-    在调的"子命令"才是有意义的（query-metrics / list-metrics / ...）。从
-    input.command 第一个 token 取出来当显示名，让用户看到"在跑哪个 skill 命令"。
+    `run_command` 是 SKILL.md 系统统一的派发器，工具名本身不可读——直接把
+    LLM 传给它的完整 CLI 命令串露出来（`query-metrics --metrics revenue
+    --start-date 2026-03-27 ...`），用户看到具体在跑什么、传了什么参数，
+    不再黑盒。
 
-    其他业务工具按原名 + 第一个短参数显示。"""
+    其他业务工具：原名 + 主要参数（用 JSON 紧凑表示，截断到 200 字符）。"""
     if not isinstance(input_data, dict) or not input_data:
         return tool_name
 
     if tool_name == "run_command":
         cmd = input_data.get("command", "")
         if isinstance(cmd, str) and cmd.strip():
-            subcmd = cmd.strip().split(maxsplit=1)[0]
-            return subcmd or tool_name
+            return cmd.strip()
         return tool_name
 
-    first_key = next(iter(input_data.keys()))
-    first_val = input_data[first_key]
-    if isinstance(first_val, str) and len(first_val) < 30:
-        return f"{tool_name}: {first_val}"
-    return tool_name
+    # 通用工具：把全部 input 紧凑序列化展出，让 LLM 传的参数透明可见
+    try:
+        import json
+        snippet = json.dumps(input_data, ensure_ascii=False, separators=(",", ":"))
+    except Exception:
+        snippet = str(input_data)
+    if len(snippet) > 200:
+        snippet = snippet[:200] + "..."
+    return f"{tool_name} {snippet}"
 
 
 async def _resume_safely(agent, approve: bool, config: dict) -> None:
