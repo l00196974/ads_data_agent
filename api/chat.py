@@ -27,67 +27,41 @@ _active_runs: dict[str, dict] = {}
 
 PLAN_INSTRUCTION = """## 执行流程（严格遵守）
 
-收到用户问题后，按以下顺序执行：
+收到用户问题后，**直接**按以下顺序执行，不需要任何"宣告计划"或"中间进度"步骤：
 
-1. **第一步调用 `send_plan`**，声明本次将要执行的任务（2-5 个）
-   - 每项格式：`{"id": "t1", "name": "任务描述"}`
-   - id 按 `t1, t2, t3...` 顺序，name 简短中文（≤20 字）
-   - **plan 中只包含真正的业务工具调用**（即下面"业务技能"段落里 SKILL.md 文档定义的 `run_command` 子命令）
-   - **不要**把 `send_to_user` / `send_plan` 这种展示/规划动作列为任务——它们是输出指令，不是计算步骤
-   - **任务数量必须等于你接下来要调用的业务工具数量**——每个任务对应一次工具调用，按声明的顺序执行
-   - 任务的 running / done 状态由系统根据工具执行自动推断，**你不需要也无法手动上报状态**
+1. **直接调用业务工具**（即 `run_command`，每次传一条 CLI 命令），需要几个就调几个，
+   一次一个，不输出中间散文。
 
-2. **按 plan 顺序依次调用业务工具**（即 `run_command`，每次传一条 CLI 命令），一次一个
+2. **业务工具全部执行完毕后，直接以 Markdown 文本输出最终分析结果**——
+   系统会把你的文字逐 token 流式推送到前端。
 
-3. **业务工具全部执行完毕后，直接以 Markdown 文本输出最终分析结果**——系统会把你的文字逐 token 流式推送到前端。
+3. **（可选）需要展示图表时，紧跟在 Markdown 文本之后调用：**
+   ```
+   send_to_user(action="chart", chart_type="line", title="...", x_data=[...], series=[...])
+   ```
+   `chart_type`: `bar` | `line` | `pie` | `scatter`。最多 1-2 个图表。
 
-## 中间进度提示
+4. **（可选）最后再输出一行 Markdown 引导追问**（如"如需下钻分析某渠道..."）。
 
-执行过程中如需告知用户进展，**只能**使用：
+## 不要做的事
 
-```
-send_to_user(action="progress", content="正在查询数据...")
-```
-
-`progress` 显示在顶部状态栏，不进消息流。
-
-**禁止在工具调用之间输出散文或"思考"**——保持静默直到下一个工具调用，避免类似"我现在要查询..."、"接下来..."这样的中间话语进入消息流。所有自然语言只能出现在最终分析阶段（步骤 3）。
-
-## 图表展示
-
-需要展示图表时调用：
-
-```
-send_to_user(action="chart", chart_type="line", title="...", x_data=[...], series=[...])
-```
-
-`chart_type`: `bar` | `line` | `pie` | `scatter`
-
-## 最终输出顺序
-
-所有业务工具执行完成后，按以下顺序输出最终结果：
-
-1. **直接输出 Markdown 文本** — 数据结论和分析摘要（会逐 token 流式推送）
-2. （可选）一个或多个 `send_to_user(action="chart", ...)` — 图表
-3. **直接输出 Markdown 文本** — 引导追问（如"如需下钻分析某渠道..."），**只能放在最后**
+- ❌ 不要在工具调用之前 / 之间输出"我现在要查询..."、"接下来..."这种散文
+- ❌ 不要重复声明你要做什么——直接做即可。前端会自动展示工具执行进度
+- ❌ 不要调用任何"宣告 / 进度"性质的工具——这些都是纯展示开销，浪费一整次 LLM round trip
 
 ## 标准示例
 
-用户问"查询最近7天点击数据并生成折线图"，假设你看到 SKILL.md 注册了 `query-metrics` 子命令：
+用户问"查询最近7天点击数据并生成折线图"，假设 SKILL.md 注册了 `query-metrics`：
 
-1. `send_plan(tasks=[{"id":"t1","name":"查询最近7天点击"},{"id":"t2","name":"生成趋势折线图"}])`
-2. `send_to_user(action="progress", content="正在查询数据...")`
-3. `run_command(command="query-metrics --metrics click --start-date 2026-04-21 --end-date 2026-04-27 --time-mode event --dimensions day")`
-4. **直接输出**：
+1. `run_command(command="query-metrics --metrics click --start-date 2026-04-21 --end-date 2026-04-27 --time-mode event --dimensions day")`
+2. 直接输出 Markdown：
 ```
 **最近7天点击趋势**
 - 总点击：xxx
 - 日均：xxx
 ```
-5. `send_to_user(action="chart", chart_type="line", title="点击趋势", x_data=[...], series=[...])`
-6. **直接输出**："如需下钻分析某渠道，请告诉我。"
-
-send_plan 是计划展示，不是询问用户，无需等待用户回复。
+3. `send_to_user(action="chart", chart_type="line", title="点击趋势", x_data=[...], series=[...])`
+4. 直接输出："如需下钻分析某渠道，请告诉我。"
 """
 
 

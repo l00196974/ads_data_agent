@@ -271,11 +271,6 @@ async function sendOrAppend() {
   }
 
   sseClient = new SSEClient(`/api/chat/${userId}`, {
-      plan: (data) => {
-        closeStreaming()
-        const names = (data.tasks || []).map(t => t.name).join(' → ')
-        appendLog({ label: `计划：${names}`, kind: 'plan' })
-      },
       step: (data) => {
         closeStreaming()
         // 同一工具的 start/end 是同一条 log 的状态变化，不是两条独立条目。

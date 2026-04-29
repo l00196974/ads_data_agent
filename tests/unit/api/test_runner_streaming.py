@@ -17,8 +17,10 @@ from api.channel.web_sse import WebSSEChannel
 
 
 def test_meta_tool_filter():
-    assert _is_meta_tool("send_plan")
+    # send_* 前缀都视为 channel-injected meta tool（即使 send_plan 已下线，
+    # 保留前缀过滤是为了兼容未来再加的展示型工具）
     assert _is_meta_tool("send_to_user")
+    assert _is_meta_tool("send_plan")
     assert not _is_meta_tool("query_campaign_report")
     assert not _is_meta_tool("build_chart")
 
@@ -73,16 +75,6 @@ def test_business_tool_emits_step_events():
     ]
 
 
-def test_send_plan_filtered_as_meta():
-    """send_plan is a meta-tool — its tool_start/tool_end must not leak through."""
-    emitted = _run_with_events([
-        {"event": "on_tool_start", "name": "send_plan", "data": {"input": {"tasks": []}}},
-        {"event": "on_tool_end", "name": "send_plan", "data": {}},
-    ])
-    types = [e["event"] for e in emitted]
-    assert types == ["done"], f"send_plan leaked: {types}"
-
-
 def test_send_to_user_filtered_as_meta():
     """send_to_user is also meta — chart/progress emissions go through the
     skill closure, runner shouldn't re-emit step events for it."""
@@ -109,10 +101,6 @@ def test_no_task_update_events_emitted():
     """Append-only model: runner never emits task_update — that whole layer
     is gone. Frontend infers nothing from these events anymore."""
     emitted = _run_with_events([
-        {"event": "on_tool_start", "name": "send_plan", "data": {"input": {
-            "tasks": [{"id": "t1", "name": "x"}, {"id": "t2", "name": "y"}]
-        }}},
-        {"event": "on_tool_end", "name": "send_plan", "data": {}},
         {"event": "on_tool_start", "name": "query_campaign_report", "data": {"input": {}}},
         {"event": "on_tool_end", "name": "query_campaign_report", "data": {}},
     ])

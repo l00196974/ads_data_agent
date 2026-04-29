@@ -53,36 +53,21 @@ from benchmarks.ads_eval.scorers import (  # noqa: E402
 
 
 def _make_eval_channel_skills(captures: dict) -> list:
-    """提供 send_plan / send_to_user 的 stub 实现，捕获调用而不做 IO。
+    """提供 send_to_user 的 stub 实现，捕获调用而不做 IO。
 
     LLM 看到的 tool 签名 + docstring 跟 WebSSEChannel 完全一致——保证 agent
     行为不会因为 channel 类型变化而漂移。
     """
-    async def send_plan(tasks: list) -> str:
-        """在开始执行任何工具之前，必须首先调用此工具规划任务步骤。
-
-        tasks: 任务列表，每项格式为 {"id": "t1", "name": "任务描述"}
-        任务的 running/done 状态由系统自动推断，无需也无法手动上报。
-        """
-        captures["plans"].append(tasks)
-        return "ok"
-
     async def send_to_user(
-        action: str,
-        content: str = "",
+        action: str = "chart",
         chart_type: str = "bar",
         title: str = "",
         x_data: list = None,
         series: list = None,
     ) -> str:
-        """向用户发送结构化产物。
-
-        action: "chart" 渲染图表（需 chart_type/title/x_data/series）
-                "progress" 顶部状态条文字（content 字段）
-        """
+        """渲染交互图表（仅 action="chart"）。chart_type / title / x_data / series 同 Web 端。"""
         captures["outputs"].append({
             "action": action,
-            "content": content,
             "chart_type": chart_type,
             "title": title,
             "x_data": x_data or [],
@@ -90,7 +75,7 @@ def _make_eval_channel_skills(captures: dict) -> list:
         })
         return "ok"
 
-    return [send_plan, send_to_user]
+    return [send_to_user]
 
 
 async def _run_task(task: dict, cfg, md_pkg, user_id: str) -> dict:

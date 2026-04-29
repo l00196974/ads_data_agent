@@ -42,10 +42,6 @@ class BaseChannel(ABC):
         """工具执行步骤：tool_start / tool_end（显示在顶部步骤追踪区）"""
 
     @abstractmethod
-    async def send_plan(self, tasks: list) -> None:
-        """发送任务计划列表 [{"id": "t1", "name": "..."}]"""
-
-    @abstractmethod
     async def send_progress(self, message: str) -> None:
         """显示在顶部进度条的状态文字（不进消息流）"""
 
