@@ -35,10 +35,7 @@ e2e-*.png
 # Eval outputs（每次跑都会变，靠 results.json.example 当模板）
 benchmarks/*/results.json
 
-# 每实例本地化的 skill 配置（含 API URL / 密钥；.example 是模板）
-skills/*/config.json
-
-# 每实例本地化的 skill 业务数据（CSV / JSON 等真实数据）
-# 框架不关心 skills/ 下任何内容，部署方自行管理
-skills/*/config/
+# 框架不内置任何业务技能——skills/ 下的 skill 包都属于部署方维护的本地内容，
+# git 不该追踪。如果你确实需要把某个 skill 纳入这份仓库管理，可以 git add -f 覆盖。
+skills/*/
 
