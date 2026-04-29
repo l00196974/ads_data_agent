@@ -1,12 +1,103 @@
 # 01 项目定位（Project Positioning）
 
-> ⏳ **占位**：本篇骨架已建，内容待补。
+## 一、一句话定位
 
-**关联源码**：`README.md`、`prompts/system_agent.md`
+**华为广告平台数据分析 AI Agent** —— 一个让营销 / 运维人员通过自然语言对话，
+完成数据查询、异常诊断、报表生成、敏感操作执行（带确认）的智能助手框架。
 
-**计划覆盖**：
-- 产品定位：华为广告平台数据分析 AI Agent
-- 目标用户画像（营销 / 运维）
-- 核心使用场景（自然语言查指标、异动诊断、报表生成）
-- 与传统 BI / 仪表盘工具的差异点
-- 边界（不做什么：广告投放编辑、自动决策审批等）
+## 二、目标用户
+
+| 角色 | 典型诉求 |
+|---|---|
+| 营销专员 | 查昨天活动报表、看 CTR 异动、生成周报、调整出价 |
+| 运维 / 投放 | 监控异常、批量暂停 / 删除问题广告组、修改预算 |
+| 数据分析师 | 自定义分析逻辑（上传 SKILL.md）、深度下钻 |
+
+不针对：终端 C 端用户、广告主自助平台、实时投放决策系统。
+
+## 三、核心使用场景
+
+### 3.1 自然语言查报表
+
+用户："查询昨天华南区域所有移动端活动的 CTR 异常"
+→ Agent 调 `query-metrics` 工具，输出表格 + 折线图 + 异常诊断建议
+
+### 3.2 多轮交互式诊断
+
+用户：「上面那个 CTR 跌得最多的活动，看下它的曝光分布」
+→ Agent 通过 conversation 上下文记住"那个活动"是谁，自动展开下钻
+
+### 3.3 敏感操作确认
+
+用户："把这些异常活动都暂停"
+→ Agent 准备调 `pause_campaign` 工具 → HitL 弹窗 → 用户 approve → 执行
+
+### 3.4 自定义分析能力
+
+用户上传自己写的 SKILL.md 包（如"按行业分组对比"）→ 立即可在对话里调用
+
+---
+
+## 四、与传统 BI / 仪表盘工具的差异点
+
+| 维度 | 传统 BI（Tableau / Quick BI / 自研报表） | 本 Agent |
+|---|---|---|
+| 入口 | 拖拽配置仪表盘 | 自然语言对话 |
+| 灵活性 | 预定义 dashboard | 任意临时问题，按需查 |
+| 跨数据源 | 需 ETL 预处理 | LLM 编排多个 skill 调用 |
+| 异常诊断 | 看图自己判断 | LLM 自动诊断并解释 |
+| 操作能力 | 只读 | 读 + 写（带 HitL 守卫） |
+| 学习成本 | 中（需学拖拽 + 配置） | 低（会说话就行） |
+| 适合的问题 | 高频 / 标准化报表 | 低频 / 临时性 / 探索性 |
+
+**Agent 不替代 BI，是补充**——高频标准报表仍走 dashboard，临时探索 + 跨数据源 + 异常诊断走 Agent。
+
+---
+
+## 五、产品边界（不做什么）
+
+- ❌ **不做实时投放决策系统**：Agent 给建议，不自动改投放——任何写操作都走 HitL 确认
+- ❌ **不做广告主自助平台**：当前只服务内部营销 / 运维人员
+- ❌ **不做仪表盘**：高频报表请用现有 BI 工具，Agent 服务的是临时性探索
+- ❌ **不做端到端归因模型**：Agent 调用现有归因 skill，不做模型训练
+- ❌ **不做多语言**：仅中文 prompt + 中文回复，UI 也是中文（华为内部使用场景）
+
+---
+
+## 六、技术定位
+
+本仓库是一个**通用框架**——LLM 编排 + Channel 抽象 + SKILL.md 加载 + HitL 确认 + 持久化等
+"通用 Agent 平台"能力。具体业务能力（指标查询 / 报表导出 / 异常检测）通过 SKILL.md 包外挂。
+
+→ 同样的框架代码可以服务："广告 Data Agent"、"运维 Data Agent"、"客服 Data Agent" 等
+任何 *数据分析 + 自然语言* 场景。换 SKILL.md 包就行。
+
+详见 [02-features/01-skill-tool-channel-model.md](../02-features/01-skill-tool-channel-model.md)。
+
+---
+
+## 七、与同类项目的关系
+
+| 项目 | 关系 |
+|---|---|
+| `langchain` / `langgraph` | 我们站在它的肩膀上（langgraph 提供 agent 状态机 + checkpointer） |
+| `deepagents` | langgraph 之上的 agent 装配 SDK，我们直接复用其 SubAgentMiddleware / SummarizationMiddleware 等能力 |
+| `Claude Code` | mental model 参考——Skill / Tool / SubAgent 的概念分层向它对齐 |
+| `Anthropic Agent SDK` | 类似但更"产品化"——本项目是定制版（含中文 / 华为广告域 prompt） |
+| `FastAPI` / `Vue 3` | 业务接入框架（HTTP / SPA） |
+
+不是 fork / 替代品 —— 我们是一个**面向广告数据场景的 agent 平台实现**，借助上述生态搭建。
+
+---
+
+## 八、当前阶段
+
+**框架阶段**：核心架构（三层概念 / 持久化 / HitL / 多用户隔离）已稳定，业务 skill 是部署
+侧资产，框架不内置。当前生产化路径上还要做：
+
+- 接真实数据源（替换 mock 服务依赖）
+- 接认证层（SSO / JWT）
+- 多副本部署（Redis registry + MySQL store）
+- 观测能力（Prometheus / OpenTelemetry）
+
+详见 [05-known-issues-and-roadmap/](../05-known-issues-and-roadmap/README.md)。
