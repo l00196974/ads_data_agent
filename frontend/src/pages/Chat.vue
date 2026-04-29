@@ -319,6 +319,15 @@ async function sendOrAppend() {
   }
 
   sseClient = new SSEClient(`/api/chat/${userId}`, {
+      plan: (data) => {
+        // send_plan 工具调用——LLM 在执行业务工具前声明的任务计划。
+        // 整段计划渲染为单条 thinking entry，按设计只声明一次，后续不更新状态。
+        closeStreaming()
+        const tasks = Array.isArray(data.tasks) ? data.tasks : []
+        if (!tasks.length) return
+        const lines = tasks.map(t => `  ⬜ ${t.name || t.id || ''}`).join('\n')
+        appendLog({ label: `📋 任务计划：\n${lines}`, kind: 'plan' })
+      },
       step: (data) => {
         closeStreaming()
         // 同一工具的 start/end 是同一条 log 的状态变化，不是两条独立条目。
@@ -790,8 +799,15 @@ function logout() {
   color: #c7000b;
 }
 .thinking-entry.entry-plan {
-  color: #595959;
+  color: #1a1a1a;
   font-weight: 500;
+  /* 计划是多行任务列表，需要保留换行符；font 不用 monospace（中文标题不需要等宽） */
+  white-space: pre-line;
+}
+.thinking-entry.entry-plan .entry-label {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  word-break: normal;
+  overflow-wrap: normal;
 }
 .entry-label {
   /* CLI 命令通常很长，break-word 在 token 边界换行（保留命令可读性）；

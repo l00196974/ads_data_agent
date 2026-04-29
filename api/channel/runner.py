@@ -5,10 +5,11 @@ from langgraph.errors import GraphInterrupt
 from langgraph.types import Command
 
 from .base import BaseChannel
+from .default_tools import make_default_tools
 
 
 def _is_meta_tool(name: str) -> bool:
-    """Channel-injected IO tools (send_plan / send_to_user / ...) — they
+    """Default framework tools (send_plan / send_to_user / ...) — they
     represent display/output actions, not business work, so they don't
     produce step events."""
     return name.startswith("send_")
@@ -66,8 +67,9 @@ class AgentRunner:
         build_agent_fn,
         config: dict,
     ) -> None:
-        skill = channel.get_skill()
-        extra_tools = skill if isinstance(skill, list) else [skill]
+        # 默认工具集（send_plan 等）由 framework 提供，闭包绑定到当前 channel。
+        # agent 视角下它们是稳定的"系统工具"；channel 切换时只换底层 IO 实现。
+        extra_tools = make_default_tools(channel)
         agent = build_agent_fn(extra_tools=extra_tools)
 
         # 仅用于 progress 文案区分"规划中"vs"执行中"——状态推断已经下放给前端。

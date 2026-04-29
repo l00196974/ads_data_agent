@@ -23,10 +23,9 @@ class WebSSEChannel(BaseChannel):
         data = json.dumps({"message": message}, ensure_ascii=False)
         await self._queue.put(f"event: progress\ndata: {data}\n\n")
 
-    def get_skill(self):
-        # 不再注入任何展示型工具——LLM 直接在 markdown 文本里嵌 ```chart``` 代码块，
-        # 前端解析渲染，省一整轮 LLM round trip。
-        return []
+    async def send_plan(self, tasks: list[dict]) -> None:
+        data = json.dumps({"tasks": tasks}, ensure_ascii=False)
+        await self._queue.put(f"event: plan\ndata: {data}\n\n")
 
     async def wait_for_confirm(self, message: str, preview: list) -> bool:
         # 每次进 wait 前先重置——防止上一次遗留的 set 状态让本次立即返回脏值

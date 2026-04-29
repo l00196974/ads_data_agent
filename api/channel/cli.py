@@ -12,10 +12,10 @@ class CLIChannel(BaseChannel):
     async def send_progress(self, message: str) -> None:
         print(f"[进度] {message}")
 
-    def get_skill(self):
-        # 同 WebSSEChannel：图表内联 markdown，无需展示型工具。
-        # CLI 拿到 ```chart``` 块时会以原始 JSON 文本打印，方便调试。
-        return []
+    async def send_plan(self, tasks: list[dict]) -> None:
+        print("\n📋 执行计划:")
+        for t in tasks:
+            print(f"  ⬜ {t.get('id', '?')}: {t.get('name', '')}")
 
     async def wait_for_confirm(self, message: str, preview: list) -> bool:
         print(f"\n[需要确认] {message}")

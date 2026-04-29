@@ -27,15 +27,22 @@ _active_runs: dict[str, dict] = {}
 
 PLAN_INSTRUCTION = """## 执行流程（严格遵守）
 
-收到用户问题后，**直接**按以下顺序执行，不需要任何"宣告计划"或"中间进度"步骤：
+收到用户问题后，按以下顺序执行：
 
-1. **直接调用业务工具**（即 `run_command`，每次传一条 CLI 命令），需要几个就调几个，
+1. **首先调用 `send_plan` 工具**声明本次任务计划。
+
+   - tasks 列表 2-5 项，每项 `{"id": "t1", "name": "..."}`
+   - name 用简短中文，≤20 字（如"查询点击数据"、"汇总并生成图表"）
+   - id 顺序为 t1, t2, t3...
+   - **只在最开始调一次**，不要反复调用、不要中途追加
+
+2. **按计划逐项调用业务工具**（即 `run_command`，每次传一条 CLI 命令），
    一次一个，不输出中间散文。
 
-2. **业务工具全部执行完毕后，直接以 Markdown 文本输出最终分析结果**——
+3. **业务工具全部执行完毕后，直接以 Markdown 文本输出最终分析结果**——
    系统会把你的文字逐 token 流式推送到前端。
 
-3. **（可选）需要展示图表时，把图表作为 markdown 代码块嵌进文本里**，
+4. **（可选）需要展示图表时，把图表作为 markdown 代码块嵌进文本里**，
    语言标识用 `chart`，内容是一段 JSON：
 
    ~~~
@@ -49,20 +56,22 @@ PLAN_INSTRUCTION = """## 执行流程（严格遵守）
    - `series`: 每项 `{"name": "...", "data": [...]}`
    - **不要为图表单独调用任何工具**——前端会扫 markdown 里的 ```chart``` 代码块自动渲染
 
-4. **（可选）最后再输出一行 Markdown 引导追问**（如"如需下钻分析某渠道..."）。
+5. **（可选）最后再输出一行 Markdown 引导追问**（如"如需下钻分析某渠道..."）。
 
 ## 不要做的事
 
 - ❌ 不要在工具调用之前 / 之间输出"我现在要查询..."、"接下来..."这种散文
 - ❌ 不要重复声明你要做什么——直接做即可。前端会自动展示工具执行进度
-- ❌ 不要调用任何"宣告 / 进度 / 图表"性质的工具——浪费一整次 LLM round trip
+- ❌ 不要调用任何额外的"进度 / 图表 / 摘要"性质的工具——除 `send_plan` 外，
+   一律通过最终 Markdown 文本输出，避免无谓的 LLM round trip
 
 ## 标准示例
 
 用户问"查询最近7天点击数据并生成折线图"，假设 SKILL.md 注册了 `query-metrics`：
 
-1. `run_command(command="query-metrics --metrics click --start-date 2026-04-21 --end-date 2026-04-27 --time-mode event --dimensions day")`
-2. 直接输出 Markdown：
+1. `send_plan(tasks=[{"id":"t1","name":"查询点击数据"},{"id":"t2","name":"生成趋势图"}])`
+2. `run_command(command="query-metrics --metrics click --start-date 2026-04-21 --end-date 2026-04-27 --time-mode event --dimensions day")`
+3. 直接输出 Markdown：
 
 ~~~
 **最近7天点击趋势**
