@@ -19,6 +19,22 @@ agent:
     summarization_keep_messages: 10        # 压缩后保留最近 N 条消息原文
     tool_output_max_bytes: 5000            # 工具返回值超此字节数则截断（暂未启用）
 
+  # 子 Agent 列表（主→子任务委派，缓解长上下文）：
+  # 主 Agent 看到 task 工具，可调用 task(subagent_type="<name>", description="...") 把脏活下放。
+  # 子 Agent 独立 context window，结束只把最终 ToolMessage 内容回主 Agent。
+  # 默认空列表 = 不启用 task 工具。
+  subagents: []
+  #   - name: metric-analyzer
+  #     description: 深度分析指标数据，独立上下文，返回 ≤300 字结论摘要
+  #     system_prompt: |
+  #       你是指标分析专家。仅分析输入数据，不做任何 IO；输出结论 ≤300 字，
+  #       直奔结论不解释过程。
+  #   - name: report-writer
+  #     description: 整合多份分析结论生成最终结构化报表
+  #     system_prompt: |
+  #       你是报表撰写专家。读输入的多份分析结论，输出 Markdown 报表。
+  #     model: openai:gpt-4o     # 可选：覆盖主 Agent 模型
+
 persistence:
   type: local
   data_dir: ./data

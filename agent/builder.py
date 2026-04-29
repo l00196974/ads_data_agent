@@ -46,6 +46,14 @@ def build_agent(
         ),
     ]
 
+    # 子 Agent 列表（独立 context window，主→子任务委派靠 deepagents 内置 task 工具）。
+    # SubAgentSpec.dict() 直接对齐 deepagents.SubAgent TypedDict 结构；空字典字段（如
+    # model 为 None）要剔除，避免 "provider:None" 这种非法值传到底层。
+    subagents = [
+        {k: v for k, v in s.model_dump().items() if v is not None}
+        for s in cfg.agent.subagents
+    ]
+
     # 注意：deepagents 默认会注入一个 SummarizationMiddleware，
     # 我们已经在 agent/checkpointer.py 模块顶部 monkey-patch 了它的工厂函数，
     # 所以默认那个会按 config.yaml 里 agent.long_context 的参数初始化。
@@ -53,6 +61,7 @@ def build_agent(
         model=model,
         tools=skills,
         system_prompt=system_prompt,
+        subagents=subagents if subagents else None,
         interrupt_on=interrupt_tools if interrupt_tools else None,
         checkpointer=get_checkpointer(),
         store=_store,

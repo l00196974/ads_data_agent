@@ -36,6 +36,47 @@ def test_build_agent_called_with_correct_model():
         assert call_kwargs is not None
 
 
+def test_build_agent_passes_subagents_when_configured():
+    """SubAgentSpec 列表非空时，应作为 subagents kwarg 透传给 create_deep_agent。
+    None 字段（如未指定的 model）必须从 dict 里剔除——deepagents 收到 model=None
+    会尝试加载 'None:None' 模型导致报错。"""
+    from agent.config import AppConfig, AgentConfig, SubAgentSpec, LLMConfig
+    with patch("agent.builder.create_deep_agent") as mock_create, \
+         patch("agent.builder.get_checkpointer") as mock_cp, \
+         patch("agent.builder._build_model") as mock_model:
+        mock_create.return_value = MagicMock()
+        mock_cp.return_value = MagicMock()
+        mock_model.return_value = MagicMock()
+        from agent.core import build_agent
+        cfg = AppConfig(
+            agent=AgentConfig(subagents=[
+                SubAgentSpec(name="analyzer", description="分析", system_prompt="你是分析师"),
+            ]),
+            llm=LLMConfig(provider="openai", model="gpt-4o", api_key="x"),
+        )
+        build_agent(user_id="u", system_prompt="t", skills=[], interrupt_on=[], cfg=cfg)
+
+        kwargs = mock_create.call_args.kwargs
+        assert kwargs["subagents"] == [
+            {"name": "analyzer", "description": "分析", "system_prompt": "你是分析师"}
+        ]
+
+
+def test_build_agent_subagents_none_when_empty():
+    """空 subagents 列表应传 None 给 deepagents（关闭 task 工具）。"""
+    from agent.config import AppConfig, LLMConfig
+    with patch("agent.builder.create_deep_agent") as mock_create, \
+         patch("agent.builder.get_checkpointer") as mock_cp, \
+         patch("agent.builder._build_model") as mock_model:
+        mock_create.return_value = MagicMock()
+        mock_cp.return_value = MagicMock()
+        mock_model.return_value = MagicMock()
+        from agent.core import build_agent
+        cfg = AppConfig(llm=LLMConfig(provider="openai", model="gpt-4o", api_key="x"))
+        build_agent(user_id="u", system_prompt="t", skills=[], interrupt_on=[], cfg=cfg)
+        assert mock_create.call_args.kwargs["subagents"] is None
+
+
 def test_build_model_openai_protocol(monkeypatch):
     from agent.config import AppConfig, LLMConfig
     from agent.core import _build_model

@@ -37,11 +37,28 @@ class LongContextConfig(BaseModel):
     tool_output_max_bytes: int = 5000
 
 
+class SubAgentSpec(BaseModel):
+    """单个子 Agent 的声明（透传给 deepagents.SubAgent TypedDict）。
+
+    每个子 Agent 拥有独立 context window：主 Agent 调 `task` 工具委派任务给子 Agent，
+    子 Agent 跑完只把最终 ToolMessage 内容回主 Agent，中间过程不污染主上下文。
+    这是缓解长上下文问题的"主方案"——`SummarizationMiddleware` 是兜底。
+
+    可选字段（model）省略时继承主 Agent 配置；tools 默认继承主 Agent 的工具集。
+    """
+
+    name: str                  # 唯一标识，主 Agent 用此名调用 task()
+    description: str           # 子 Agent 职责，主 Agent 据此决定何时委派
+    system_prompt: str         # 子 Agent 自己的角色 prompt
+    model: str | None = None   # 可选，"provider:model" 格式覆盖主 Agent 模型
+
+
 class AgentConfig(BaseModel):
     max_iterations: int = 20
     timeout_seconds: int = 120
     interrupt_on: list[str] = []
     long_context: LongContextConfig = LongContextConfig()
+    subagents: list[SubAgentSpec] = []  # 主 Agent 可派工的子 Agent 列表
 
 
 class LLMConfig(BaseModel):
