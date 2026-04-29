@@ -1,17 +1,215 @@
 # 测试策略（Testing Strategy）
 
-> ⏳ **占位**：本篇骨架已建，内容待补。
+项目把"自动化测试"分成三层独立目录，各自服务不同目的。理解这个分工对维护测试套件至关重要。
 
-**关联源码**：`tests/`、`scripts/`、`benchmarks/`
+## 一、三层测试分工
 
-**计划覆盖**：
-- 三类测试的分工：
-  - `tests/unit/`：离线单测（39 个，~20s 跑完，无 LLM 调用，pytest）
-  - `scripts/`：持久可重跑的 E2E 验证（真实打 LLM，按需手动跑）
-  - `benchmarks/`：性能 / 评测（profile_latency / ads_eval）
-- 镜像源码结构的目录约定（`tests/unit/agent/test_*.py` 对应 `agent/*.py`）
-- patch "使用点"而不是"定义点"（agent.builder.create_deep_agent 而非 agent.core.create_deep_agent）
-- mock 哪些 / 不 mock 哪些（不 mock checkpointer——会失去类型保证）
-- requirements-dev.txt 缺失的现状（pytest / pytest-asyncio 未在主 requirements）
-- CI（暂未配置）
+| 目录 | 用途 | 是否真打 LLM | 跑频次 |
+|---|---|---|---|
+| `tests/unit/` | 离线单元测试 | ❌ 否（mock） | 每次提交 / CI |
+| `scripts/` | E2E 验证（持久可重跑） | ✅ 是 | 按需手动 |
+| `benchmarks/` | 评测 / 性能 profiling | ✅ 是 | 周期性 |
 
+不要在 unit/ 里放真打 LLM 的测试——会变慢、不稳定、外部依赖多。
+不要在 scripts/ 里放一次性诊断脚本——commit 一次结论后就该删除。
+
+---
+
+## 二、`tests/unit/` 单元测试
+
+### 2.1 现状
+
+- **39 个测试，~21 秒跑完**（离线，无 LLM 调用）
+- 镜像源码结构：
+
+```
+tests/unit/
+├── agent/
+│   ├── test_config.py            ↔ agent/config.py
+│   ├── test_core.py              ↔ agent/core.py / builder.py / llm.py
+│   ├── test_store.py             ↔ agent/store.py
+│   ├── test_tool_output_truncation.py  ↔ agent/middleware/tool_output_truncation.py
+│   └── test_user_space.py        ↔ agent/user_space.py
+└── api/
+    ├── test_channel_registry.py  ↔ api/channel/registry.py
+    └── test_runner_streaming.py  ↔ api/channel/runner.py
+```
+
+### 2.2 跑测试
+
+```bash
+# 全套
+.venv/Scripts/python.exe -m pytest tests/
+
+# 单文件
+.venv/Scripts/python.exe -m pytest tests/unit/agent/test_core.py -v
+
+# 单条
+.venv/Scripts/python.exe -m pytest tests/unit/agent/test_core.py::test_build_model_openai_protocol -v
+```
+
+### 2.3 写测试约定
+
+#### Patch "使用点"而不是"定义点"
+
+```python
+# ✅ 正确
+patch("agent.builder.create_deep_agent")
+
+# ❌ 错误（agent.core 是 re-export shim，名字早已绑定到 agent.builder 的命名空间）
+patch("agent.core.create_deep_agent")
+```
+
+#### Mock 哪些 / 不 mock 哪些
+
+| Mock | 原因 |
+|---|---|
+| ✅ `create_deep_agent` | 不想真起 langgraph |
+| ✅ `_build_model` | 不想真打 LLM |
+| ✅ `get_checkpointer` | 避免依赖 SQLite 文件 |
+| ❌ `BaseChannel` 子类 | 测 channel 行为时直接实例化，不 mock |
+| ❌ `Pydantic schemas` | mock 类型检查会被绕过，失去测试价值 |
+
+#### Reset 模块级 singleton
+
+`agent/store.py::_store` 等模块级单例要在每个测试前 reset，否则跨 test 状态泄漏：
+
+```python
+def _reset_store_module():
+    import agent.store as s
+    s._store = None
+    s._exit_stack = None
+```
+
+### 2.4 当前覆盖空白
+
+- `api/chat.py` 的 endpoint 逻辑（cancel / append / reset 等）—— 用 `httpx.AsyncClient` + lifespan 测试可以加上
+- `api/skills.py` 的 zip 上传 / 解压安全 —— 应该补
+- `agent/skill_loader.py` 的 SKILL.md 解析、subprocess 执行 —— 应该补
+- `frontend/` —— 完全没有前端测试（Vue 组件 / SSE client）
+
+---
+
+## 三、`scripts/` E2E 验证
+
+```
+scripts/
+├── verify_p0_e2e.py        SSE 时序回归（启 backend，发一次 chat，断言 plan + step 时序）
+├── stress_long_context.py  5 轮压力测试（同 thread_id，inspect AsyncSqliteSaver 中累积曲线）
+└── validate_summarization.py  monkey-patch trigger 到 10k，确认 SummarizationMiddleware 触发 + cutoff_index 正确
+```
+
+跑前提：
+- 后端必须跑在 `:8000`
+- `.env` 配好真实 LLM API key
+- 每次跑会消耗 `~$0.01-0.10` LLM 费用（视测试规模）
+
+不要把这些脚本接到 CI——成本不受控。
+
+### 3.1 持久可重跑 vs 一次性诊断
+
+写脚本时先问：**这个脚本明年还会跑吗**？
+
+- 是 → 进 `scripts/`，加 docstring 说明用途，commit 入库
+- 否 → 跑完一次得出结论后**删除**，commit 信息留下结论
+
+### 3.2 何时跑
+
+- 改了 SSE 协议 → `verify_p0_e2e.py`
+- 改了 long_context 配置 / SummarizationMiddleware → `validate_summarization.py`
+- 上线前回归 → 全部跑一遍
+
+---
+
+## 四、`benchmarks/` 评测与性能
+
+```
+benchmarks/
+├── profile_latency.py    单次 chat 端到端耗时分解
+└── ads_eval/             广告域评测题库（FDABench 风格）
+    ├── README.md         详细用法
+    ├── cases/            题目 yaml
+    └── runner.py         批量跑题 + 打分
+```
+
+### 4.1 `profile_latency.py`
+
+跑一次端到端调用，记录每阶段（LLM / 工具 / SSE 推送）耗时。详见
+[observability.md::4.1](./observability.md#41-benchmarksprofile_latencypy)。
+
+### 4.2 `ads_eval/`
+
+广告域专用评测，独立 README。设计要点：
+- 题库基于部署侧 SKILL.md 包构造（框架不内置题）
+- 串行跑（避免 mock server 并发）
+- 用 stub channel 捕获 send_plan 等 default tool 调用，不做 IO，但工具签名跟生产一致
+
+跑评测：
+
+```bash
+.venv/Scripts/python.exe -m benchmarks.ads_eval.runner --cases benchmarks/ads_eval/cases/
+```
+
+输出每题的 LLM 调用次数、工具命中率、最终回答 GPT-4 评分。
+
+---
+
+## 五、依赖管理
+
+### 5.1 测试依赖**不在** `requirements.txt`
+
+`pytest` / `pytest-asyncio` 等 dev 依赖目前**不在**主 `requirements.txt`——
+重建 venv 后需要按需手动装：
+
+```bash
+.venv/Scripts/pip install pytest pytest-asyncio
+```
+
+### 5.2 LLM provider 依赖也不全
+
+`langchain-anthropic` / `langchain-google-genai` 等可选 provider 也不在 `requirements.txt`，
+按用到的厂商单独装：
+
+```bash
+.venv/Scripts/pip install langchain-anthropic    # 用 Claude 直连时
+.venv/Scripts/pip install langchain-google-genai # 用 Gemini 时
+```
+
+### 5.3 Roadmap
+
+应建 `requirements-dev.txt` 把 dev 依赖固化下来，且加上常用 provider 的可选依赖。
+见 [roadmap.md::P2](../05-known-issues-and-roadmap/roadmap.md)。
+
+---
+
+## 六、CI（暂未配置）
+
+当前没有自动化 CI——每次 commit 后人工跑 `pytest tests/` 验证。
+
+最小可行 CI（未实施）：
+
+```yaml
+# .github/workflows/test.yml（草稿）
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.13' }
+      - run: pip install -r requirements.txt pytest pytest-asyncio
+      - run: pytest tests/ -v
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - run: cd frontend && npm ci && npm run build
+```
+
+---
+
+## 关联源码
+
+- `tests/unit/` — 单元测试
+- `scripts/` — E2E 验证脚本
+- `benchmarks/` — 评测 / 性能
+- `requirements.txt` — 主依赖（不含 dev / 可选 provider）
