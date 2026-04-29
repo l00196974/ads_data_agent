@@ -71,6 +71,11 @@ class LLMConfig(BaseModel):
 class PersistenceConfig(BaseModel):
     type: str = "local"
     data_dir: str = "./data"
+    # Store 后端选择：deepagents 内置工具的持久化层。
+    #   memory: InMemoryStore，进程内 dict（重启即丢，多副本失同步）
+    #   sqlite: AsyncSqliteStore（默认），落 data/store.db
+    #   mysql:  未实现 stub
+    store_backend: str = "sqlite"
 
 
 class SkillsConfig(BaseModel):

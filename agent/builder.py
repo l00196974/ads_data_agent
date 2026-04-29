@@ -5,16 +5,12 @@ below), which in turn monkey-patches deepagents' default Summarization
 factory before any `create_deep_agent` call happens.
 """
 from deepagents import create_deep_agent
-from langgraph.store.memory import InMemoryStore
 
 from agent.checkpointer import get_checkpointer
 from agent.config import AppConfig, load_config
 from agent.llm import _build_model
 from agent.middleware import ToolOutputTruncationMiddleware
-
-
-# Module-level singleton (shared by all users; thread_id isolates per-user data).
-_store = InMemoryStore()
+from agent.store import get_store
 
 
 def build_agent(
@@ -64,7 +60,7 @@ def build_agent(
         subagents=subagents if subagents else None,
         interrupt_on=interrupt_tools if interrupt_tools else None,
         checkpointer=get_checkpointer(),
-        store=_store,
+        store=get_store(),
         middleware=user_middleware,
     )
     return agent

@@ -7,7 +7,12 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from agent.config import load_config
-from agent.core import close_checkpointer, init_checkpointer
+from agent.core import (
+    close_checkpointer,
+    close_store,
+    init_checkpointer,
+    init_store,
+)
 from agent.user_space import UserSpace
 from api import chat, skills
 
@@ -16,10 +21,14 @@ cfg = load_config()
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    # AsyncSqliteSaver 必须在事件循环里 init（aiosqlite 是 async）
+    # AsyncSqliteSaver / AsyncSqliteStore 都依赖 aiosqlite，必须在事件循环里 init
     await init_checkpointer()
-    yield
-    await close_checkpointer()
+    await init_store()
+    try:
+        yield
+    finally:
+        await close_store()
+        await close_checkpointer()
 
 
 app = FastAPI(title="Ads Data Agent", lifespan=lifespan)

@@ -18,11 +18,15 @@ from agent.checkpointer import (
     init_checkpointer,
 )
 from agent.llm import _build_model
+from agent.store import close_store, get_store, init_store
 
 __all__ = [
     "build_agent",
     "close_checkpointer",
     "get_checkpointer",
     "init_checkpointer",
+    "close_store",
+    "get_store",
+    "init_store",
     "_build_model",
 ]
