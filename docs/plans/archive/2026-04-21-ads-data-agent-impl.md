@@ -1,5 +1,10 @@
 # Ads Data Agent 实现计划
 
+> ⚠️ **历史归档 (Archived)**：本文为 2026-04-21 实施流水账，按 TDD 步骤逐 task 落地
+> 第一版骨架。当前代码经多次重构已不再对应（包括 LLM 双协议路由、SKILL.md 加载器替代
+> 内置 skill、AsyncSqliteSaver/Store 替代 InMemorySaver/Store 等）。**最新架构请参阅
+> `docs/02-features/` 下的功能专题**。仅作时间线证据保留。
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** 构建华为广告数据分析 Agent 平台，支持多用户隔离、流式执行、Human-in-the-Loop 中断、图表可视化。

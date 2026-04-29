@@ -1,5 +1,11 @@
 # Agent Execution Panel Implementation Plan
 
+> ⚠️ **历史归档 (Archived)**：本文为 2026-04-22 执行面板首版实施 plan。其中描述的
+> "LLM 主动调 `update_task` 工具上报状态" 已被推翻 —— 当前架构由 `AgentRunner` 自主
+> 监听 `on_tool_start/end` 推送状态变化（**append-only 模型**），`update_task` 工具
+> 已删除，`send_to_user` 也已废弃（图表内联到 markdown 由前端解析）。仅 `send_plan`
+> 工具保留。**最新架构请参阅 `docs/02-features/03-execution-panel.md`**。
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** 用户提问后，在消息流中插入固定的执行面板，显示 Agent 规划的任务列表（逐步更新状态）和实时 tips 区域（显示当前正在做什么）。

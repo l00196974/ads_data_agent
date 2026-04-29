@@ -1,5 +1,9 @@
 # Ads Data Agent 设计文档
 
+> ⚠️ **历史归档 (Archived)**：本文为 2026-04-21 早期设计快照，多处描述与当前实现已偏离
+> （如 `agent/core.py` 已变 re-export shim、`sub_agents/` 目录从未实际创建、`skills/system/`
+> 内置 mock skill 已删除）。**最新架构请参阅 `docs/02-features/` 下的功能专题**。仅作时间线证据保留。
+
 **日期：** 2026-04-21  
 **目标用户：** 华为广告营销与运维人员  
 **技术栈：** deepAgent SDK + LangGraph + FastAPI + Vue 3 + ECharts
