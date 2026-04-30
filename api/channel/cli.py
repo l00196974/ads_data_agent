@@ -17,6 +17,10 @@ class CLIChannel(BaseChannel):
         for t in tasks:
             print(f"  ⬜ {t.get('id', '?')}: {t.get('name', '')}")
 
+    async def send_artifact_updated(self, artifact_id: str, action: str) -> None:
+        emoji = "📦" if action == "created" else "🔄"
+        print(f"\n{emoji} Artifact {action}: {artifact_id}")
+
     async def wait_for_confirm(self, message: str, preview: list) -> bool:
         print(f"\n[需要确认] {message}")
         return input("approve/cancel: ").strip() == "approve"

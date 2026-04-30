@@ -27,6 +27,10 @@ class WebSSEChannel(BaseChannel):
         data = json.dumps({"tasks": tasks}, ensure_ascii=False)
         await self._queue.put(f"event: plan\ndata: {data}\n\n")
 
+    async def send_artifact_updated(self, artifact_id: str, action: str) -> None:
+        data = json.dumps({"artifact_id": artifact_id, "action": action}, ensure_ascii=False)
+        await self._queue.put(f"event: artifact_updated\ndata: {data}\n\n")
+
     async def wait_for_confirm(self, message: str, preview: list) -> bool:
         # 每次进 wait 前先重置——防止上一次遗留的 set 状态让本次立即返回脏值
         self._confirm_event.clear()

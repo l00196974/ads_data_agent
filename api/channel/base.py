@@ -58,6 +58,14 @@ class BaseChannel(ABC):
         """
 
     @abstractmethod
+    async def send_artifact_updated(self, artifact_id: str, action: str) -> None:
+        """通知用户产生 / 更新了一个 artifact。
+
+        action: "created" | "updated"
+        Channel 自行决定怎么呈现：WebSSE 推 SSE event；CLI 打印简短通知。
+        """
+
+    @abstractmethod
     async def wait_for_confirm(self, message: str, preview: list) -> bool:
         """HitL：等待用户确认，返回 True=approve"""
 
