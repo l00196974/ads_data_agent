@@ -3,6 +3,7 @@
     <header class="topbar">
       <span class="brand">华为广告数据助手</span>
       <span class="user-tag">{{ userId }}</span>
+      <button class="btn-new" @click="$router.push('/artifacts')">📦 我的工作区</button>
       <button class="btn-new" @click="clearChat">新对话</button>
       <button class="btn-logout" @click="logout">退出</button>
     </header>
