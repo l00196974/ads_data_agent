@@ -105,3 +105,30 @@ def test_no_task_update_events_emitted():
         {"event": "on_tool_end", "name": "query_campaign_report", "data": {}},
     ])
     assert not any(e["event"] == "task_update" for e in emitted)
+
+
+def test_runner_pushes_artifact_updated_when_tool_output_contains_sentinel():
+    """工具结束后 runner 应从 event["data"]["output"] 抽 artifact_ids，推 SSE 事件。"""
+    emitted = _run_with_events([
+        {"event": "on_tool_start", "name": "run_command", "data": {"input": {}}},
+        {
+            "event": "on_tool_end",
+            "name": "run_command",
+            "data": {"output": "DIR=/tmp/x\nID=abc\n\n[已生成 artifact: 2026-04-30-120000-a]\n[已生成 artifact: 2026-04-30-120000-b]"},
+        },
+    ])
+    artifact_events = [e for e in emitted if e["event"] == "artifact_updated"]
+    assert len(artifact_events) == 2
+    ids = {e["data"]["artifact_id"] for e in artifact_events}
+    assert ids == {"2026-04-30-120000-a", "2026-04-30-120000-b"}
+    assert all(e["data"]["action"] == "created" for e in artifact_events)
+
+
+def test_runner_no_artifact_event_when_output_has_no_sentinel():
+    """普通工具返回（无 sentinel）不推 artifact_updated 事件。"""
+    emitted = _run_with_events([
+        {"event": "on_tool_start", "name": "run_command", "data": {"input": {}}},
+        {"event": "on_tool_end", "name": "run_command", "data": {"output": "just plain output"}},
+    ])
+    artifact_events = [e for e in emitted if e["event"] == "artifact_updated"]
+    assert len(artifact_events) == 0

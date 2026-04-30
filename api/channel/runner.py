@@ -6,6 +6,7 @@ from langgraph.types import Command
 
 from .base import BaseChannel
 from .default_tools import make_default_tools
+from agent.skill_loader import extract_artifact_ids_from_output
 
 
 def _is_meta_tool(name: str) -> bool:
@@ -107,6 +108,11 @@ class AgentRunner:
                         continue
                     input_data = event.get("data", {}).get("input", {})
                     await channel.send_step(_format_tool_label(tool_name, input_data), "tool_end")
+                    # 工具结束后从 output 抽 artifact_ids（用 sentinel 解析），推 SSE
+                    output = event.get("data", {}).get("output", "")
+                    if isinstance(output, str):
+                        for artifact_id in extract_artifact_ids_from_output(output):
+                            await channel.send_artifact_updated(artifact_id, "created")
                 elif kind == "on_chain_end":
                     outputs = event.get("data", {}).get("output", {})
                     if isinstance(outputs, dict) and "__interrupt__" in outputs:
