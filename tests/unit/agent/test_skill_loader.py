@@ -1,4 +1,14 @@
-"""skill_loader 的 stderr artifact 通知解析。"""
+"""skill_loader 的 stderr artifact 通知解析。
+
+设计：
+- skill 通过 stderr 输出 <<<ADS_AGENT:ARTIFACT_UPDATED:artifact_id=...>>> 通知
+- run_command 抽 ids 后用 human-friendly sentinel "[已生成 artifact: <id>]" 加到 output 末尾
+- runner 在 on_tool_end 用 extract_artifact_ids_from_output 抽 ids 推 SSE
+
+为什么不用 ContextVar：langchain tool.arun() 用 create_task(coro, context=copied_ctx)
+跨 task 边界，子 task 对 ContextVar 的写入对父 task 不可见。output sentinel 通过
+工具返回值传递，langgraph 的 on_tool_end event["data"]["output"] 始终能拿到。
+"""
 import asyncio
 import os
 from pathlib import Path
@@ -39,10 +49,11 @@ sys.stderr.write(f"<<<ADS_AGENT:ARTIFACT_UPDATED:artifact_id={artifact_id}>>>\\n
     return tmp_path
 
 
-def test_run_command_extracts_artifact_id_from_stderr(skills_root):
+def test_run_command_appends_artifact_trailer_to_output(skills_root):
+    """skill 写 stderr 通知后，run_command 应把 ids 用 sentinel 加到 stdout 末尾。"""
     from agent.skill_loader import (
         load_md_skills,
-        consume_pending_artifact_ids,
+        extract_artifact_ids_from_output,
     )
 
     pkg = load_md_skills(skills_root, user_dir=None)
@@ -52,23 +63,25 @@ def test_run_command_extracts_artifact_id_from_stderr(skills_root):
     os.environ["ADS_AGENT_ARTIFACT_ID"] = "2026-04-30-120000-test"
     os.environ["ADS_AGENT_ARTIFACT_DIR"] = "/tmp/x"
     try:
-        async def _run():
-            consume_pending_artifact_ids()  # 清残留（同一 context 内）
-            output = await tool.coroutine(command="echo-env")
-            ids = consume_pending_artifact_ids()
-            return output, ids
-
-        output, ids = asyncio.run(_run())
+        output = asyncio.run(tool.coroutine(command="echo-env"))
     finally:
         del os.environ["ADS_AGENT_ARTIFACT_ID"]
         del os.environ["ADS_AGENT_ARTIFACT_DIR"]
 
     assert "DIR=/tmp/x" in output
     assert "ID=2026-04-30-120000-test" in output
+    # ADS_AGENT 内部标识行不应回到给 LLM 的工具返回里
+    assert "<<<ADS_AGENT:" not in output
+    # human-friendly sentinel 应附加到末尾
+    assert "[已生成 artifact: 2026-04-30-120000-test]" in output
+
+    # runner 用的 helper 能从 output 抽 ids
+    ids = extract_artifact_ids_from_output(output)
     assert ids == ["2026-04-30-120000-test"]
 
 
 def test_extract_artifact_ids_pattern():
+    """内部函数：从 stderr 文本抽 ids + clean。"""
     from agent.skill_loader import _extract_artifact_ids
 
     ids, clean = _extract_artifact_ids(
@@ -99,10 +112,16 @@ def test_extract_artifact_ids_no_match():
     assert clean == "just plain text"
 
 
-def test_consume_drains_pending(skills_root):
-    """consume 一次后 contextvar 应该清空。"""
-    from agent.skill_loader import consume_pending_artifact_ids, _pending_artifact_ids
+def test_extract_artifact_ids_from_output_empty():
+    """无 artifact 时 output 不变，helper 返 []。"""
+    from agent.skill_loader import extract_artifact_ids_from_output
 
-    _pending_artifact_ids.set(["x", "y"])
-    assert consume_pending_artifact_ids() == ["x", "y"]
-    assert consume_pending_artifact_ids() == []
+    assert extract_artifact_ids_from_output("just plain output") == []
+
+
+def test_extract_artifact_ids_from_output_multiple():
+    """多 artifact 时全部抽出。"""
+    from agent.skill_loader import extract_artifact_ids_from_output
+
+    output = "result\n\n[已生成 artifact: a]\n[已生成 artifact: b]"
+    assert extract_artifact_ids_from_output(output) == ["a", "b"]

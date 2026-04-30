@@ -34,7 +34,6 @@ import json
 import re
 import shlex
 import sys
-from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -149,14 +148,18 @@ def _make_run_tool(commands: dict[str, Path], workdirs: dict[str, Path]) -> Stru
         err = stderr.decode("utf-8", errors="replace")
 
         artifact_ids, err_clean = _extract_artifact_ids(err)
+        trailer = ""
         if artifact_ids:
-            existing = list(_pending_artifact_ids.get())
-            existing.extend(artifact_ids)
-            _pending_artifact_ids.set(existing)
+            # Sentinel 给 runner 解析（也让 LLM 看到——这是 human-friendly 提示，
+            # LLM 在最终 markdown 里可引用这些 artifact）。runner 在 on_tool_end 时
+            # 从 event["data"]["output"] 抽 ids 后推 SSE。
+            trailer = "\n\n" + "\n".join(
+                f"[已生成 artifact: {aid}]" for aid in artifact_ids
+            )
 
         if proc.returncode != 0:
-            return f"[exit {proc.returncode}] {subcmd}\nstderr:\n{err_clean}\nstdout:\n{out}"
-        return out
+            return f"[exit {proc.returncode}] {subcmd}\nstderr:\n{err_clean}\nstdout:\n{out}{trailer}"
+        return out + trailer
 
     return StructuredTool.from_function(
         coroutine=run_command,
@@ -264,13 +267,15 @@ def _extract_artifact_ids(text: str) -> tuple[list[str], str]:
     return ids, cleaned
 
 
-_pending_artifact_ids: ContextVar[list[str]] = ContextVar(
-    "_pending_artifact_ids", default=[]
-)
+_ARTIFACT_TRAILER_PATTERN = re.compile(r"\[已生成 artifact: ([^\]]+)\]")
 
 
-def consume_pending_artifact_ids() -> list[str]:
-    """Runner 在每次 LLM 工具调用结束后调一次，获取本次产生的 artifact id 并清空。"""
-    ids = list(_pending_artifact_ids.get())
-    _pending_artifact_ids.set([])
-    return ids
+def extract_artifact_ids_from_output(output: str) -> list[str]:
+    """从工具返回的 output 字符串里抽出 artifact_id 列表。
+
+    Runner 在 on_tool_end 拿到 event["data"]["output"] 后调此函数，对抽出的每个
+    id 推 SSE event: artifact_updated。
+
+    返回 []（无 artifact）或 ["id1", "id2", ...]。
+    """
+    return _ARTIFACT_TRAILER_PATTERN.findall(output)
