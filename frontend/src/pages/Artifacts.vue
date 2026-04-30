@@ -41,7 +41,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onActivated } from 'vue'
 import ArtifactBrowser from '../components/ArtifactBrowser.vue'
 
 const userId = localStorage.getItem('user_id') || 'anon'
@@ -80,7 +80,10 @@ function formatTime(iso) {
   return new Date(iso).toLocaleString('zh-CN', { hour12: false })
 }
 
+// onMounted 处理首次进入；onActivated 处理 KeepAlive 缓存后的重新进入
+// （否则切到 /chat 再回来时不会刷新最新 artifact 列表）
 onMounted(load)
+onActivated(load)
 </script>
 
 <style scoped>

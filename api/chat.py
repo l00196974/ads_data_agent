@@ -39,6 +39,15 @@ PLAN_INSTRUCTION = """## 执行流程（严格遵守）
 2. **按计划逐项调用业务工具**（即 `run_command`，每次传一条 CLI 命令），
    一次一个，不输出中间散文。
 
+   **重要**：`run_command` 的 `command` 参数是**子命令名 + 参数**，**不要**前缀 skill 包名。
+   即使用户说"调用 demo-artifact-writer 的 write-demo-report"，你也应该传：
+
+       ✅ `run_command(command="write-demo-report --title '测试'")`
+       ❌ `run_command(command="demo-artifact-writer write-demo-report --title '测试'")`
+
+   已注册的子命令清单见下方"业务技能"段——`run_command` 只接受这些子命令名，
+   传 skill 包名会得到 `Error: 未注册的命令` 错误。
+
 3. **业务工具全部执行完毕后，直接以 Markdown 文本输出最终分析结果**——
    系统会把你的文字逐 token 流式推送到前端。
 

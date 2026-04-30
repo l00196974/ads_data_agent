@@ -1,5 +1,11 @@
 <template>
-  <RouterView />
+  <!-- KeepAlive 让 Chat / Artifacts 组件在路由切换时被缓存，state 不丢失。
+       Artifacts.vue 用 onActivated 钩子在每次重新激活时刷新列表。 -->
+  <RouterView v-slot="{ Component }">
+    <KeepAlive>
+      <component :is="Component" />
+    </KeepAlive>
+  </RouterView>
 </template>
 
 <script setup>
