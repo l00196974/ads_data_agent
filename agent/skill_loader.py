@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import shlex
 import sys
@@ -102,8 +103,18 @@ def _resolve_command(script_path: Path) -> list[str]:
     return [abs_path]
 
 
-def _make_run_tool(commands: dict[str, Path], workdirs: dict[str, Path]) -> StructuredTool:
-    """单一通用工具：根据 command 字符串第一个 token 找到对应 skill 脚本，subprocess 执行。"""
+def _make_run_tool(
+    commands: dict[str, Path],
+    workdirs: dict[str, Path],
+    user_id: str | None = None,
+    artifacts_root: Path | None = None,
+) -> StructuredTool:
+    """单一通用工具：根据 command 字符串第一个 token 找到对应 skill 脚本，subprocess 执行。
+
+    user_id / artifacts_root：可选；若两者都提供，每次工具调用会自动生成 artifact_id +
+    目录路径，并通过 subprocess env 注入给 skill 脚本（ADS_AGENT_ARTIFACT_DIR /
+    ARTIFACT_ID / USER_ID）。skill 不一定要写 artifact——它可选。
+    """
 
     available = list(commands.keys())
 
@@ -132,11 +143,34 @@ def _make_run_tool(commands: dict[str, Path], workdirs: dict[str, Path]) -> Stru
             return f"Error: 未注册的命令 '{subcmd}'。可用命令：{available}"
 
         cmd_argv = _resolve_command(commands[subcmd]) + parts[1:]
+
+        # 构造 subprocess env：复制当前进程 env + 注入 artifact 上下文。
+        # 注意不能依赖 runner 在 on_tool_start 设 os.environ ——langchain 用 create_task
+        # 派发 tool 协程，env 写入和 subprocess 启动有 race（asyncio 事件循环时序不可控，
+        # subprocess 先启动而 env 还没设上）。改为这里**显式**构造 env 字典传给 subprocess，
+        # 确保每次工具调用 env 准确。e2e 实测：runner 设 os.environ 模式下 skill 拿到的是
+        # 上一次调用的 env，导致 artifact 写到错的路径。
+        from datetime import datetime as _datetime
+
+        env = dict(os.environ)
+        if user_id is not None and artifacts_root is not None:
+            timestamp = _datetime.now().strftime("%Y-%m-%d-%H%M%S")
+            artifact_id = f"{timestamp}-report"
+            # **必须**用绝对路径——subprocess 的 cwd 是 skill 目录（不是项目根），
+            # 相对路径会解析到 skill 目录下导致 artifact 写错位置。
+            # e2e 实测：相对路径 ./data/{user}/artifacts/ → skill 把文件写到
+            # skills/<name>/data/{user}/artifacts/ 而 REST API 看不到。
+            artifact_dir = (artifacts_root / artifact_id).resolve()
+            env["ADS_AGENT_ARTIFACT_DIR"] = str(artifact_dir)
+            env["ADS_AGENT_ARTIFACT_ID"] = artifact_id
+            env["ADS_AGENT_USER_ID"] = user_id
+
         proc = await _spawn_subprocess(
             *cmd_argv,
             cwd=str(workdirs[subcmd]),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=env,
         )
         try:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
@@ -176,6 +210,8 @@ def _make_run_tool(commands: dict[str, Path], workdirs: dict[str, Path]) -> Stru
 def load_md_skills(
     system_dir: Path | str,
     user_dir: Path | str | None = None,
+    user_id: str | None = None,
+    artifacts_root: Path | str | None = None,
 ) -> SkillsPackage:
     """扫描 system_dir + 可选 user_dir，加载所有 SKILL.md 技能包。
 
@@ -186,6 +222,10 @@ def load_md_skills(
         source 字段：'system'（仓库内置）或 'user'（用户上传）
 
     用户 skill 命名冲突时**用户覆盖系统**——允许用户用同名 skill 替换内置实现。
+
+    user_id + artifacts_root：可选；同时提供时，run_command 会为每次工具调用自动生成
+    artifact_id + 目录并通过 subprocess env（ADS_AGENT_*）注入给 skill。skill 可选择
+    是否真的写 artifact。
     """
     commands: dict[str, Path] = {}
     workdirs: dict[str, Path] = {}
@@ -248,9 +288,10 @@ def load_md_skills(
         + "\n\n---\n\n".join(doc_sections)
     )
 
+    artifacts_root_path = Path(artifacts_root) if artifacts_root is not None else None
     return SkillsPackage(
         prompt_addition=prompt_addition,
-        tools=[_make_run_tool(commands, workdirs)],
+        tools=[_make_run_tool(commands, workdirs, user_id=user_id, artifacts_root=artifacts_root_path)],
         summaries=summaries,
     )
 

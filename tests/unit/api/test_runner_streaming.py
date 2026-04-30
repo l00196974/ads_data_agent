@@ -134,34 +134,44 @@ def test_runner_no_artifact_event_when_output_has_no_sentinel():
     assert len(artifact_events) == 0
 
 
-def test_runner_injects_artifact_env_per_tool_call(monkeypatch):
-    """on_tool_start 时 runner 应在 ADS_AGENT_* env 里设置当前调用的上下文。"""
+def test_runner_extracts_ids_from_tool_message_output():
+    """langgraph 在 on_tool_end 给的 output 通常是 ToolMessage（不是裸 str），
+    runner 必须从 .content 取文本——这是真实 e2e 跑时发现的 bug。"""
+    from langchain_core.messages import ToolMessage
+    tm = ToolMessage(
+        content="result\n[已生成 artifact: 2026-04-30-150000-x]",
+        tool_call_id="call_1",
+    )
+    emitted = _run_with_events([
+        {"event": "on_tool_start", "name": "run_command", "data": {"input": {}}},
+        {"event": "on_tool_end", "name": "run_command", "data": {"output": tm}},
+    ])
+    artifact_events = [e for e in emitted if e["event"] == "artifact_updated"]
+    assert len(artifact_events) == 1
+    assert artifact_events[0]["data"]["artifact_id"] == "2026-04-30-150000-x"
+
+
+def test_runner_does_not_inject_env_to_global_environ(monkeypatch):
+    """runner 不再用 os.environ 注入 ADS_AGENT_* env——会和 langchain create_task
+    派发的 tool 协程有 race。env 注入由 skill_loader.run_command 在调用 subprocess
+    时显式做（见 test_skill_loader.py::test_skill_loader_injects_artifact_env）。
+
+    本测试守住"不再注入"行为，避免 regression 把 runner 改回 race-prone 模式。"""
     import os
-    captured = {}
 
-    async def fake_stream():
-        yield {"event": "on_tool_start", "name": "run_command", "data": {"input": {"command": "echo"}}}
-        captured["dir"] = os.environ.get("ADS_AGENT_ARTIFACT_DIR")
-        captured["id"] = os.environ.get("ADS_AGENT_ARTIFACT_ID")
-        captured["user"] = os.environ.get("ADS_AGENT_USER_ID")
-        yield {"event": "on_tool_end", "name": "run_command", "data": {"output": "done"}}
+    # 清掉可能遗留的 env
+    for k in ["ADS_AGENT_ARTIFACT_DIR", "ADS_AGENT_ARTIFACT_ID", "ADS_AGENT_USER_ID"]:
+        os.environ.pop(k, None)
 
-    from unittest.mock import MagicMock
-    channel, _ = _make_channel()
-    fake_agent = MagicMock()
-    fake_agent.astream_events = lambda *a, **kw: fake_stream()
-
-    from api.channel.runner import AgentRunner
-    runner = AgentRunner()
-    asyncio.run(runner.run(channel, "msg", lambda extra_tools=None: fake_agent, {
-        "configurable": {"thread_id": "alice_conv1"}
-    }))
-
-    assert captured.get("dir") is not None
-    assert "alice" in captured.get("dir")
-    assert captured.get("user") == "alice"
-    import re
-    assert re.match(r"^\d{4}-\d{2}-\d{2}-\d{6}-report$", captured["id"] or "")
+    emitted = _run_with_events([
+        {"event": "on_tool_start", "name": "run_command", "data": {"input": {}}},
+        {"event": "on_tool_end", "name": "run_command", "data": {"output": "done"}},
+    ])
+    # Step events 仍正常发出
+    assert any(e["event"] == "step" and e["data"].get("type") == "tool_start" for e in emitted)
+    # 但 ADS_AGENT_* env 不应该被 runner 设上
+    assert "ADS_AGENT_ARTIFACT_DIR" not in os.environ
+    assert "ADS_AGENT_ARTIFACT_ID" not in os.environ
 
 
 def test_runner_handles_missing_thread_id():

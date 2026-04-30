@@ -98,7 +98,16 @@ PLAN_INSTRUCTION = """## 执行流程（严格遵守）
 
 def _make_build_fn(user_id: str):
     us = UserSpace(user_id, cfg.persistence.data_dir)
-    md_pkg = load_md_skills(cfg.skills.md_dir, us.skills_dir)
+    # 把 user_id + artifacts_root 传给 skill_loader——run_command 内部为每次工具调用
+    # 显式构造 subprocess env（含 ADS_AGENT_ARTIFACT_DIR / ARTIFACT_ID / USER_ID）。
+    # 不能依赖 runner 在 on_tool_start 设 os.environ：langchain 用 create_task 派发 tool
+    # 协程，env 写入与 subprocess 启动有 race，会导致 skill 拿到错的 env（或上次的 env）。
+    md_pkg = load_md_skills(
+        cfg.skills.md_dir,
+        us.skills_dir,
+        user_id=user_id,
+        artifacts_root=us.artifacts_dir,
+    )
 
     # SKILL.md 全文塞进 system prompt，LLM 直接看 CLI 用法
     system_prompt = PLAN_INSTRUCTION + "\n\n" + us.get_agents_md()

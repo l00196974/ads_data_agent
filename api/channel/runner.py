@@ -109,16 +109,10 @@ class AgentRunner:
                     if _is_meta_tool(tool_name):
                         continue
                     business_tools_started += 1
-                    # 为本次工具调用预生成 artifact_id + dir，注入 env 让 skill 选择是否使用。
-                    # 用进程级 os.environ：单 worker 单进程下 LLM 工具调用串行执行，
-                    # 时序上同一时刻只有一个 subprocess 继承 env，安全。多 worker 部署
-                    # 时这套方案不可靠（见 known-issues），未来改用 subprocess 显式 env。
-                    timestamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
-                    artifact_id = f"{timestamp}-report"
-                    artifact_dir = user_space.artifacts_dir / artifact_id
-                    os.environ["ADS_AGENT_ARTIFACT_DIR"] = str(artifact_dir)
-                    os.environ["ADS_AGENT_ARTIFACT_ID"] = artifact_id
-                    os.environ["ADS_AGENT_USER_ID"] = user_id
+                    # artifact env 注入由 skill_loader.run_command 内部完成——它显式给
+                    # subprocess 传 env={ADS_AGENT_ARTIFACT_DIR/ID/USER_ID}。这里 runner
+                    # 不再设 os.environ，因为 langchain 用 create_task 派发 tool 协程，
+                    # runner 在 on_tool_start 设 env 与 subprocess 启动有 race。
                     input_data = event.get("data", {}).get("input", {})
                     step_msg = _format_tool_label(tool_name, input_data)
                     await channel.send_step(step_msg, "tool_start")
@@ -128,10 +122,13 @@ class AgentRunner:
                         continue
                     input_data = event.get("data", {}).get("input", {})
                     await channel.send_step(_format_tool_label(tool_name, input_data), "tool_end")
-                    # 工具结束后从 output 抽 artifact_ids（用 sentinel 解析），推 SSE
+                    # 工具结束后从 output 抽 artifact_ids（用 sentinel 解析），推 SSE。
+                    # langgraph 在 on_tool_end 给的 output 通常是 ToolMessage（含 content 字段），
+                    # 而 langchain 裸 tool astream 给的是 str——两种都要兼容。
                     output = event.get("data", {}).get("output", "")
-                    if isinstance(output, str):
-                        for artifact_id in extract_artifact_ids_from_output(output):
+                    output_text = output if isinstance(output, str) else getattr(output, "content", "")
+                    if output_text:
+                        for artifact_id in extract_artifact_ids_from_output(output_text):
                             await channel.send_artifact_updated(artifact_id, "created")
                 elif kind == "on_chain_end":
                     outputs = event.get("data", {}).get("output", {})
