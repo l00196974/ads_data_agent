@@ -76,6 +76,12 @@
                 </div>
               </template>
             </template>
+            <ArtifactCard
+              v-else-if="msg.type === 'artifact'"
+              :artifact-id="msg.artifactId"
+              :user-id="userId"
+              @open="(id) => browsingArtifactId = id"
+            />
             <!-- 思考过程：append-only 日志，可折叠 -->
             <div v-else-if="msg.type === 'thinking'" class="thinking-group">
               <div class="thinking-summary" @click="msg.collapsed = !msg.collapsed">
@@ -131,6 +137,15 @@
       :preview="interruptPreview"
       @confirm="handleConfirm"
     />
+    <div v-if="browsingArtifactId" class="artifact-overlay" @click.self="browsingArtifactId = null">
+      <div class="artifact-modal">
+        <ArtifactBrowser
+          :user-id="userId"
+          :artifact-id="browsingArtifactId"
+          @close="browsingArtifactId = null"
+        />
+      </div>
+    </div>
   </div>
 </template>
 
@@ -142,6 +157,8 @@ import DOMPurify from 'dompurify'
 import { SSEClient } from '../utils/sse.js'
 import ChartWidget from '../components/ChartWidget.vue'
 import ConfirmDialog from '../components/ConfirmDialog.vue'
+import ArtifactCard from '../components/ArtifactCard.vue'
+import ArtifactBrowser from '../components/ArtifactBrowser.vue'
 
 const router = useRouter()
 const userId = localStorage.getItem('user_id') || ''
@@ -165,6 +182,7 @@ const currentThinkingIdx = ref(null)
 const progressText = ref('')
 // conversationId: 同一对话内多轮共享，"新对话"按钮重置为 null（后端会生成新 id）
 const conversationId = ref(localStorage.getItem('conversation_id') || null)
+const browsingArtifactId = ref(null)
 let sseClient = null
 
 function renderMd(content) {
@@ -319,6 +337,16 @@ async function sendOrAppend() {
   }
 
   sseClient = new SSEClient(`/api/chat/${userId}`, {
+      artifact_updated: (data) => {
+        closeStreaming()
+        closeThinking()
+        messages.value.push({
+          type: 'artifact',
+          artifactId: data.artifact_id,
+          action: data.action,
+        })
+        scrollToBottom()
+      },
       plan: (data) => {
         // send_plan 工具调用——LLM 在执行业务工具前声明的任务计划。
         // 整段计划渲染为单条 thinking entry，按设计只声明一次，后续不更新状态。
@@ -1034,6 +1062,25 @@ function logout() {
   .skill-panel {
     width: 200px;
   }
+}
+
+.artifact-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+.artifact-modal {
+  width: 90vw;
+  height: 90vh;
+  max-width: 1400px;
+  background: white;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.3);
 }
 
 </style>
