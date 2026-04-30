@@ -1,0 +1,6 @@
+{
+  "name": "demo-artifact-writer",
+  "bin": {
+    "write-demo-report": "bin/write-demo-report.py"
+  }
+}
