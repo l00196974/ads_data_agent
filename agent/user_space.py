@@ -8,10 +8,11 @@ class UserSpace:
         self.skills_dir = self.data_dir / "skills"
         self.memory_dir = self.data_dir / "memory"
         self.agents_md_path = self.data_dir / "agents.md"
+        self.artifacts_dir = self.data_dir / "artifacts"
         self._ensure_dirs()
 
     def _ensure_dirs(self):
-        for d in [self.data_dir, self.skills_dir, self.memory_dir]:
+        for d in [self.data_dir, self.skills_dir, self.memory_dir, self.artifacts_dir]:
             d.mkdir(parents=True, exist_ok=True)
 
     def get_agents_md(self, system_md_path: str = "prompts/system_agent.md") -> str:

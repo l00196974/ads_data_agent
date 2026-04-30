@@ -24,3 +24,11 @@ def test_different_users_isolated(tmp_path):
     us1 = UserSpace("user_001", data_dir=str(tmp_path))
     us2 = UserSpace("user_002", data_dir=str(tmp_path))
     assert us1.data_dir != us2.data_dir
+
+
+def test_user_space_has_artifacts_dir(tmp_path):
+    us = UserSpace("alice", data_dir=str(tmp_path))
+    assert us.artifacts_dir.exists()
+    assert us.artifacts_dir.is_dir()
+    assert us.artifacts_dir.name == "artifacts"
+    assert us.artifacts_dir.parent.name == "alice"
