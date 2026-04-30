@@ -132,3 +132,43 @@ def test_runner_no_artifact_event_when_output_has_no_sentinel():
     ])
     artifact_events = [e for e in emitted if e["event"] == "artifact_updated"]
     assert len(artifact_events) == 0
+
+
+def test_runner_injects_artifact_env_per_tool_call(monkeypatch):
+    """on_tool_start 时 runner 应在 ADS_AGENT_* env 里设置当前调用的上下文。"""
+    import os
+    captured = {}
+
+    async def fake_stream():
+        yield {"event": "on_tool_start", "name": "run_command", "data": {"input": {"command": "echo"}}}
+        captured["dir"] = os.environ.get("ADS_AGENT_ARTIFACT_DIR")
+        captured["id"] = os.environ.get("ADS_AGENT_ARTIFACT_ID")
+        captured["user"] = os.environ.get("ADS_AGENT_USER_ID")
+        yield {"event": "on_tool_end", "name": "run_command", "data": {"output": "done"}}
+
+    from unittest.mock import MagicMock
+    channel, _ = _make_channel()
+    fake_agent = MagicMock()
+    fake_agent.astream_events = lambda *a, **kw: fake_stream()
+
+    from api.channel.runner import AgentRunner
+    runner = AgentRunner()
+    asyncio.run(runner.run(channel, "msg", lambda extra_tools=None: fake_agent, {
+        "configurable": {"thread_id": "alice_conv1"}
+    }))
+
+    assert captured.get("dir") is not None
+    assert "alice" in captured.get("dir")
+    assert captured.get("user") == "alice"
+    import re
+    assert re.match(r"^\d{4}-\d{2}-\d{2}-\d{6}-report$", captured["id"] or "")
+
+
+def test_runner_handles_missing_thread_id():
+    """thread_id 为空时 user_id 默认 anon，不报错。"""
+    emitted = _run_with_events([
+        {"event": "on_tool_start", "name": "run_command", "data": {"input": {}}},
+        {"event": "on_tool_end", "name": "run_command", "data": {"output": "ok"}},
+    ])
+    # 应当正常处理，不抛异常
+    assert any(e["event"] == "step" for e in emitted)

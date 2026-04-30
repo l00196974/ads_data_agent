@@ -1,4 +1,6 @@
 import asyncio
+import os
+from datetime import datetime
 
 from langchain_core.messages import HumanMessage
 from langgraph.errors import GraphInterrupt
@@ -6,7 +8,9 @@ from langgraph.types import Command
 
 from .base import BaseChannel
 from .default_tools import make_default_tools
+from agent.config import load_config
 from agent.skill_loader import extract_artifact_ids_from_output
+from agent.user_space import UserSpace
 
 
 def _is_meta_tool(name: str) -> bool:
@@ -73,6 +77,12 @@ class AgentRunner:
         extra_tools = make_default_tools(channel)
         agent = build_agent_fn(extra_tools=extra_tools)
 
+        # 解析 thread_id 拿 user_id（thread_id = "{user_id}_{conversation_id}"）
+        thread_id = config.get("configurable", {}).get("thread_id", "")
+        user_id = thread_id.split("_", 1)[0] if thread_id else "anon"
+        cfg = load_config()
+        user_space = UserSpace(user_id, cfg.persistence.data_dir)
+
         # 仅用于 progress 文案区分"规划中"vs"执行中"——状态推断已经下放给前端。
         business_tools_started = 0
 
@@ -99,6 +109,16 @@ class AgentRunner:
                     if _is_meta_tool(tool_name):
                         continue
                     business_tools_started += 1
+                    # 为本次工具调用预生成 artifact_id + dir，注入 env 让 skill 选择是否使用。
+                    # 用进程级 os.environ：单 worker 单进程下 LLM 工具调用串行执行，
+                    # 时序上同一时刻只有一个 subprocess 继承 env，安全。多 worker 部署
+                    # 时这套方案不可靠（见 known-issues），未来改用 subprocess 显式 env。
+                    timestamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
+                    artifact_id = f"{timestamp}-report"
+                    artifact_dir = user_space.artifacts_dir / artifact_id
+                    os.environ["ADS_AGENT_ARTIFACT_DIR"] = str(artifact_dir)
+                    os.environ["ADS_AGENT_ARTIFACT_ID"] = artifact_id
+                    os.environ["ADS_AGENT_USER_ID"] = user_id
                     input_data = event.get("data", {}).get("input", {})
                     step_msg = _format_tool_label(tool_name, input_data)
                     await channel.send_step(step_msg, "tool_start")
