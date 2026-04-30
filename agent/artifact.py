@@ -81,3 +81,73 @@ class Artifact:
             title=title,
             dir=artifact_dir,
         )
+
+    @classmethod
+    def load(cls, artifacts_root: Path, artifact_id: str) -> Artifact:
+        """从磁盘加载已存在的 artifact。"""
+        artifact_dir = artifacts_root / artifact_id
+        manifest_path = artifact_dir / "manifest.yaml"
+        if not manifest_path.exists():
+            raise FileNotFoundError(f"artifact 不存在或未完成（缺 manifest.yaml）：{artifact_id}")
+        manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+        return cls(
+            artifact_id=manifest["artifact_id"],
+            user_id=manifest["user_id"],
+            title=manifest.get("title", ""),
+            dir=artifact_dir,
+        )
+
+    @staticmethod
+    def list_summaries(artifacts_root: Path) -> list[dict]:
+        """列出 artifacts_root 下所有有效 artifact 的 manifest 摘要，按 created_at 倒序。"""
+        if not artifacts_root.is_dir():
+            return []
+        summaries: list[dict] = []
+        for entry in artifacts_root.iterdir():
+            if not entry.is_dir():
+                continue
+            manifest_path = entry / "manifest.yaml"
+            if not manifest_path.exists():
+                continue
+            try:
+                manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+            except (yaml.YAMLError, OSError):
+                continue
+            file_count = sum(1 for p in entry.rglob("*") if p.is_file())
+            summaries.append({
+                "artifact_id": manifest.get("artifact_id", entry.name),
+                "title": manifest.get("title", ""),
+                "created_at": manifest.get("created_at", ""),
+                "artifact_type": manifest.get("artifact_type", "mixed"),
+                "description": manifest.get("description", ""),
+                "file_count": file_count,
+            })
+        summaries.sort(key=lambda s: s["created_at"], reverse=True)
+        return summaries
+
+    def manifest(self) -> dict:
+        """读取并返回 manifest dict。"""
+        return yaml.safe_load((self.dir / "manifest.yaml").read_text(encoding="utf-8"))
+
+    def tree(self) -> list[dict]:
+        """返回目录树（递归）：[{path, type, size?, children?}, ...]"""
+        return _build_tree(self.dir, prefix="")
+
+
+def _build_tree(root: Path, prefix: str) -> list[dict]:
+    nodes: list[dict] = []
+    for entry in sorted(root.iterdir()):
+        rel_path = f"{prefix}{entry.name}" if not prefix else f"{prefix}/{entry.name}"
+        if entry.is_dir():
+            nodes.append({
+                "path": rel_path,
+                "type": "dir",
+                "children": _build_tree(entry, rel_path),
+            })
+        else:
+            nodes.append({
+                "path": rel_path,
+                "type": "file",
+                "size": entry.stat().st_size,
+            })
+    return nodes
