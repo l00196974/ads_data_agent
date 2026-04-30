@@ -1,6 +1,8 @@
 # ads_data_agent
 
-华为广告平台数据分析 AI Agent。FastAPI + Vue 3，基于 [`deepagents`](https://github.com/langchain-ai/deepagents) (建立在 LangGraph 之上) 实现的多轮对话、HitL（Human-in-the-Loop）确认、流式 SSE 输出的广告数据分析助手。
+华为广告平台数据分析 AI Agent。FastAPI + Vue 3，基于 [`deepagents`](https://github.com/langchain-ai/deepagents) (建立在 LangGraph 之上) 实现的多轮对话、流式 SSE 输出的广告数据**分析**助手。
+
+> ⚠️ **当前阶段聚焦"分析场景"**——所有输出是只读分析结果（表格 / 图表 / 诊断结论 / Markdown 报告），不涉及任何系统写操作。框架已实现 HitL 写操作守卫机制，预留给未来扩展时启用。
 
 > 详细的架构、设计决策、长上下文策略写在 [`CLAUDE.md`](./CLAUDE.md) 里。本 README 只覆盖"用起来"。
 
@@ -11,7 +13,7 @@
 - **业务工具**: 广告活动报表查询、预算使用分析、投放异常检测、ECharts 图表生成
 - **多轮对话**: 同一会话保留上下文，支持引用前几轮结果
 - **执行计划面板**: LLM 在调用业务工具前先声明计划，前端实时渲染每个任务的 `pending → running → done`
-- **HitL 确认**: 敏感操作（删除广告组、修改预算等）会拉起前端确认弹窗，用户拒绝就回滚
+- **HitL 写操作守卫**: 框架已实现（敏感操作触发前端确认弹窗），但**当前业务场景全是只读分析，未启用**。未来扩展到写操作（如批量暂停 / 改预算）时配置 `interrupt_on` 即可
 - **多对话隔离**: "新对话"按钮真正切换后端 thread，旧对话历史不参与新会话的 LLM prefill
 - **自动压缩**: 单 thread token 数超过阈值（默认 80k）自动触发 SummarizationMiddleware
 - **工具输出截断**: 超大工具返回值（默认 5KB）自动卸载到 `data/{user_id}/tool_outputs/`，避免 thread 膨胀
@@ -119,10 +121,8 @@ cd frontend && npm run build      # 产物在 frontend/dist/
 
 ```yaml
 agent:
-  interrupt_on:                  # 这些工具调用会触发 HitL 确认弹窗
-    - delete_adgroups
-    - modify_budget
-    - pause_campaign
+  interrupt_on: []               # 命中即触发 HitL；当前分析场景留空。未来加写工具时按
+                                 # LangChain tool name 列出（如 run_command / task）
 
   long_context:
     summarization_trigger_tokens: 80000   # 超此 token 数自动压缩历史

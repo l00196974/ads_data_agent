@@ -27,14 +27,18 @@
 - **解决路径**：部署前对接真实数据源，写新的 SKILL.md 包替换 mock。
 - **跟踪**：[roadmap.md::P0::data-source](./roadmap.md)
 
-### A3. `interrupt_on` 默认配置与实际 skill 不匹配
+### A3. `interrupt_on` 启动校验（已修复）
 
-- **现象**：`config.yaml::agent.interrupt_on` 默认值是 `[delete_adgroups, modify_budget, pause_campaign]`——
-  这些**词汇是占位**，实际部署的 SKILL.md 包注册的子命令名通常不一致（如真实是 `delete-adgroup`）。
-- **影响**：如果不改，敏感操作不会触发 HitL，**直接静默执行**。
-- **workaround**：部署前必须按真实 skill 的子命令名改 yaml。
-- **解决路径**：加启动校验——`interrupt_on` 列表里的工具名应该都在已加载工具集里，否则 warn / fail-fast。
-- **跟踪**：[roadmap.md::P0::interrupt-validation](./roadmap.md)
+> 状态：✅ **已解决**。当前业务为纯分析场景（无写操作），`interrupt_on` 默认空列表。
+> 启动校验 `_validate_interrupt_on` 已实现（warn 不在工具集里的条目，避免 silent bug）。
+
+- **历史现象**：`config.yaml::agent.interrupt_on` 早期默认 `[delete_adgroups, modify_budget, pause_campaign]`——
+  这些是占位词，实际部署的 SKILL.md 包注册的子命令名通常不一致。如果不改，敏感操作不会触发 HitL，**直接静默执行**——这是高风险 silent bug。
+- **修复**：
+  - 默认值改为空列表 `[]`（业务无写操作时正确状态）
+  - `agent/builder.py::_validate_interrupt_on` 启动 warn 不在工具集里的条目
+  - 业务扩展到写操作时按 LangChain tool name（如 `run_command` / `task`）填入
+- **跟踪**：commit `ff50bfc` + `<本轮>` 默认值收紧
 
 ---
 

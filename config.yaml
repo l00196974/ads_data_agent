@@ -8,10 +8,16 @@ server:
 agent:
   max_iterations: 20
   timeout_seconds: 120
-  interrupt_on:
-    - delete_adgroups
-    - modify_budget
-    - pause_campaign
+
+  # interrupt_on: 命中即触发 HitL 确认弹窗的 LangChain tool name 列表。
+  # 当前阶段定位为"分析场景"——所有 SKILL.md 包都是只读分析工具，无需 HitL，
+  # 默认空列表。未来扩展到写操作（如 pause_campaign / modify_budget）时
+  # 在这里列出工具名即可启用框架已实现的 HitL 守卫。
+  # 注意：填的应该是 LangChain tool name（如 'run_command'），不是 SKILL.md
+  # 子命令名（如 'delete-adgroup'）。startup 时 _validate_interrupt_on 会校验。
+  interrupt_on: []
+  #   - run_command       # 整个 run_command 都拦（粗粒度）
+  #   - task              # 派工子 agent 都拦
 
   # 长上下文场景：单 thread 历史超过 trigger_tokens 时自动压缩
   long_context:

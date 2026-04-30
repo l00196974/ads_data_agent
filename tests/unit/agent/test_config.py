@@ -8,7 +8,9 @@ def test_load_config_defaults():
     cfg = load_config("config.yaml")
     assert cfg.server.port == 8000
     assert cfg.agent.max_iterations == 20
-    assert "delete_adgroups" in cfg.agent.interrupt_on
+    # 当前业务定位为纯分析场景（无写操作），interrupt_on 默认为空列表。
+    # 业务扩展到写工具时按 LangChain tool name 在 yaml 启用，框架启动时会校验。
+    assert cfg.agent.interrupt_on == []
 
 
 def test_env_override(monkeypatch):

@@ -66,7 +66,7 @@
 | **Channel（通道）** | Agent 对外通信渠道 | `WebSSEChannel`、`CLIChannel` |
 | **SubAgent** | 主 Agent 派工的独立 context 子 Agent | `metric-analyzer`、`report-writer` |
 | **Thread** | langgraph 的对话状态机隔离单元 | `thread_id = "{user_id}_{conversation_id}"` |
-| **HitL** | Human-in-the-Loop，敏感操作前确认 | 删广告组 / 改预算等 |
+| **HitL** | Human-in-the-Loop，敏感操作前确认（**框架预留能力**，当前业务为纯分析未启用） | 未来扩展场景：删广告组 / 改预算等 |
 
 ---
 
@@ -94,7 +94,9 @@
 6. event_generator finally 块 unregister 清理 channel_registry
 ```
 
-### 3.2 HitL 中断
+### 3.2 HitL 中断（当前业务未启用，框架机制示意）
+
+> 当前 `interrupt_on` 默认空列表，分析类工具不会触发 HitL。下面流程是**未来扩展到写操作时**的工作机制。
 
 ```
 3.5 LLM 调 pause_campaign(...)（在 interrupt_on 列表）

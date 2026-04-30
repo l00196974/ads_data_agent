@@ -93,7 +93,10 @@ chat.py             AgentRunner.run()              build_agent()
 
 ### HitL（Human-in-the-Loop）流程
 
-`config.yaml::agent.interrupt_on` 列敏感工具名（如 `delete_adgroups`）。deepagents 命中后抛 `GraphInterrupt`（或在 `on_chain_end` 输出里塞 `__interrupt__` payload）。
+> ⚠️ **当前业务场景为纯分析（只读），HitL 不会被触发**。`config.yaml::agent.interrupt_on` 默认空列表。
+> 本节描述的是**框架预留能力**，机制完整且测试通过——未来扩展到写操作时直接启用。
+
+`config.yaml::agent.interrupt_on` 列敏感的 LangChain tool name（如 `run_command` / `task`）。deepagents 命中后抛 `GraphInterrupt`（或在 `on_chain_end` 输出里塞 `__interrupt__` payload）。
 
 #### Runner 层统一接口
 所有 channel 共用一个 contract：
