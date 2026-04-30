@@ -24,7 +24,7 @@ def _validate_artifact_id(artifact_id: str) -> None:
 
 
 def _user_space(user_id: str) -> UserSpace:
-    if "/" in user_id or ".." in user_id:
+    if "/" in user_id or "\\" in user_id or ".." in user_id:
         raise HTTPException(400, "非法 user_id")
     return UserSpace(user_id, cfg.persistence.data_dir)
 

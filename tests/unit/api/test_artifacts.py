@@ -139,3 +139,16 @@ def _flat(tree):
         if n.get("type") == "dir":
             out.extend(_flat(n.get("children", [])))
     return out
+
+
+def test_user_id_rejects_backslash(client):
+    """Windows 路径分隔符 \\ 不能绕过 user_id 校验。"""
+    resp = client.get("/api/artifacts/alice%5Cbob")  # %5C = \
+    assert resp.status_code == 400
+
+
+def test_user_id_rejects_traversal(client):
+    """user_id 含 .. 应 400。"""
+    # 用 URL 编码确保 .. 进入 user_id 参数
+    resp = client.get("/api/artifacts/%2E%2E")
+    assert resp.status_code == 400
