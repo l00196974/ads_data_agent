@@ -50,6 +50,7 @@ Consequences / Alternatives*。
 | [10-persistence-and-checkpoints](02-features/10-persistence-and-checkpoints.md) | AsyncSqliteSaver + AsyncSqliteStore |
 | [11-system-skills-catalog](02-features/11-system-skills-catalog.md) | 系统内置业务 skill（SKILL.md 加载） |
 | [12-user-skill-upload](02-features/12-user-skill-upload.md) | 用户自定义 skill 上传 |
+| [13-artifact-system](02-features/13-artifact-system.md) | Artifact 系统（持久化大型分析产物） |
 
 ### 03 接口参考（API Reference）
 
