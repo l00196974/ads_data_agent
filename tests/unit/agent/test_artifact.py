@@ -107,6 +107,46 @@ def test_tree_lists_files_and_dirs(tmp_path: Path):
     assert "data/raw.json" in paths
 
 
+def test_delete_artifact_removes_dir(tmp_path: Path):
+    art = Artifact.create(user_id="u", title="t", slug="x", artifacts_root=tmp_path)
+    assert art.dir.exists()
+    Artifact.delete(tmp_path, art.artifact_id)
+    assert not art.dir.exists()
+
+
+def test_delete_missing_artifact_raises(tmp_path: Path):
+    import pytest
+
+    with pytest.raises(FileNotFoundError):
+        Artifact.delete(tmp_path, "2026-04-30-000000-nope")
+
+
+def test_safe_file_path_resolves_within_artifact(tmp_path: Path):
+    art = Artifact.create(user_id="u", title="t", slug="x", artifacts_root=tmp_path)
+    (art.dir / "data").mkdir()
+    (art.dir / "data" / "x.json").write_text("{}", encoding="utf-8")
+    p = art.safe_file_path("data/x.json")
+    assert p == (art.dir / "data" / "x.json").resolve()
+
+
+def test_safe_file_path_rejects_traversal(tmp_path: Path):
+    import pytest
+
+    art = Artifact.create(user_id="u", title="t", slug="x", artifacts_root=tmp_path)
+    with pytest.raises(ValueError, match="非法路径"):
+        art.safe_file_path("../../../etc/passwd")
+    with pytest.raises(ValueError, match="非法路径"):
+        art.safe_file_path("/etc/passwd")
+
+
+def test_safe_file_path_rejects_missing_file(tmp_path: Path):
+    import pytest
+
+    art = Artifact.create(user_id="u", title="t", slug="x", artifacts_root=tmp_path)
+    with pytest.raises(FileNotFoundError):
+        art.safe_file_path("nonexistent.json")
+
+
 def _flatten(tree: list) -> list:
     out = []
     for node in tree:

@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import re
+import shutil
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -132,6 +133,27 @@ class Artifact:
     def tree(self) -> list[dict]:
         """返回目录树（递归）：[{path, type, size?, children?}, ...]"""
         return _build_tree(self.dir, prefix="")
+
+    @staticmethod
+    def delete(artifacts_root: Path, artifact_id: str) -> None:
+        """删除整个 artifact 目录。"""
+        artifact_dir = artifacts_root / artifact_id
+        if not artifact_dir.is_dir():
+            raise FileNotFoundError(f"artifact 不存在：{artifact_id}")
+        shutil.rmtree(artifact_dir)
+
+    def safe_file_path(self, relative_path: str) -> Path:
+        """把 relative_path 解析到 artifact 目录内的绝对路径，禁止穿越。"""
+        if relative_path.startswith("/") or ".." in Path(relative_path).parts:
+            raise ValueError(f"非法路径：{relative_path}")
+
+        target = (self.dir / relative_path).resolve()
+        artifact_root_resolved = self.dir.resolve()
+        if not target.is_relative_to(artifact_root_resolved):
+            raise ValueError(f"非法路径（跳出 artifact 目录）：{relative_path}")
+        if not target.is_file():
+            raise FileNotFoundError(f"文件不存在：{relative_path}")
+        return target
 
 
 def _build_tree(root: Path, prefix: str) -> list[dict]:
