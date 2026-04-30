@@ -30,6 +30,7 @@ data: {"msg": "query-metrics --metrics click", "type": "tool_start"}
 | [`step`](#step) | 业务工具开始/结束 | `{"msg": str, "type": "tool_start" \| "tool_end"}` |
 | [`progress`](#progress) | LLM 思考期填充文案 | `{"message": str}` |
 | [`plan`](#plan) | LLM 调 `send_plan` 工具 | `{"tasks": [{"id": str, "name": str}, ...]}` |
+| [`artifact_updated`](#artifact_updated) | skill 创建/更新 artifact 后推送 | `{"artifact_id": str, "action": "created" \| "updated"}` |
 | [`interrupt`](#interrupt) | HitL 触发，等待 confirm | `{"message": str, "preview": list}` |
 | [`done`](#done) | 流正常结束 | `{}` |
 | [`error`](#error) | 流异常结束（runner 捕获到 Exception） | `{"error": str}` —— 当前实现以 token 形式输出错误文本，`event: error` 是预留 |
@@ -162,6 +163,31 @@ agent 命中 `interrupt_on` 配置的敏感工具时，runner 阻塞等待用户
 > **特例**：cancel + 重起场景下（`/append` endpoint 触发），runner 在 `CancelledError`
 > 时**不**调 `channel.close()`——SSE 连接保持开着，让新一轮 agent 在同连接上继续推事件。
 > 此时前端不会看到中间的 `done`，直到第二轮真正结束。详见 `api/channel/runner.py:118-133`。
+
+---
+
+## artifact_updated
+
+skill 在执行过程中创建 / 更新 artifact 时通过此事件通知前端。
+
+**Schema**：
+```json
+{"artifact_id": "2026-04-30-093015-report", "action": "created"}
+```
+
+- `artifact_id`：新建或更新的 artifact id
+- `action`：`"created"` 或 `"updated"`
+
+**触发链路**：
+1. skill 写文件到 `$ADS_AGENT_ARTIFACT_DIR`
+2. skill 向 stderr 输出 `<<<ADS_AGENT:ARTIFACT_UPDATED:artifact_id=<id>>>>`
+3. `agent/skill_loader.py::run_command` 把这行从 stderr strip 掉，**用 human-friendly sentinel `[已生成 artifact: <id>]` 拼到 stdout 末尾**（出于 ContextVar 跨 langchain task 失效的设计原因，详见 ADR-021）
+4. langgraph emit `on_tool_end`，event["data"]["output"] 含 sentinel
+5. runner 用 `extract_artifact_ids_from_output(output)` 抽 ids
+6. 对每个 id 调 `channel.send_artifact_updated(artifact_id, "created")`
+7. WebSSE channel 推 `event: artifact_updated` SSE 帧
+
+详见 [02-features/13-artifact-system.md](../02-features/13-artifact-system.md)。
 
 ---
 

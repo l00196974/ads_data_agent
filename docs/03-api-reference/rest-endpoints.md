@@ -268,6 +268,53 @@ my-skill.zip
 
 ---
 
+## 10. Artifact 相关
+
+### GET `/api/artifacts/{user_id}` — 列出用户 artifact
+
+返摘要列表，按 created_at 倒序。
+
+```json
+{
+  "artifacts": [
+    {
+      "artifact_id": "2026-04-30-093015-report",
+      "title": "...",
+      "created_at": "2026-04-30T09:30:15+08:00",
+      "artifact_type": "report",
+      "description": "...",
+      "file_count": 8
+    }
+  ]
+}
+```
+
+### GET `/api/artifacts/{user_id}/{artifact_id}/manifest`
+
+返 manifest + 完整目录树。
+
+### GET `/api/artifacts/{user_id}/{artifact_id}/file/{relative_path}`
+
+拿单文件。404 / 400（路径穿越）。
+
+### GET `/api/artifacts/{user_id}/{artifact_id}/zip`
+
+整包 zip 下载，`Content-Type: application/zip`。
+
+### DELETE `/api/artifacts/{user_id}/{artifact_id}`
+
+删除 artifact。返 `{"status": "deleted", "artifact_id": "..."}`。
+
+### 安全约束
+
+- `artifact_id` 必须匹配 `^\d{4}-\d{2}-\d{2}-\d{6}-[a-z0-9][a-z0-9-]*$`，否则 400
+- `user_id` 含 `/` / `\\` / `..` 拒绝（防路径穿越，含 Windows 反斜杠）
+- file 路径 `safe_file_path` 双层防护：字符串模式 + `is_relative_to()`
+
+详见 [02-features/13-artifact-system.md](../02-features/13-artifact-system.md)。
+
+---
+
 ## 错误响应通用约定
 
 - HTTP 4xx：FastAPI 标准 `{"detail": "..."}` 格式

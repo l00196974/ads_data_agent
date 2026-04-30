@@ -165,6 +165,12 @@
   - 实现 `agent/subagent_loader.py`（仿 `agent/skill_loader.py`）
 - **触发条件**：当某个部署有 5+ 子 Agent 时再做
 
+### P2.11 — artifact-v2: 共享 / 整理 / 搜索
+
+- **背景**：v1 artifact 是 immutable + 扁平列表
+- **范围**：collection 概念 + rename/move + 全文搜索 + retention policy
+- **触发条件**：用户工作区累积 ≥50 份 artifact 时
+
 ---
 
 ## 时间线建议（参考）

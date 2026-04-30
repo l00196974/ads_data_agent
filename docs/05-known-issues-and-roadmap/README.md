@@ -83,6 +83,17 @@
 - **解决路径**：建 task registry 按 conversation_id 索引，cancel endpoint 拿到 task 直接 task.cancel()。
 - **跟踪**：[roadmap.md::P2::server-side-cancel](./roadmap.md)
 
+### B5. Artifact v2 扩展未实现
+
+- 多 artifact 合并 / 重组 / 重命名 / 移动 / 共享
+- 跨用户分享
+- 自动 retention（90 天归档 / 删除）
+- artifact 全文搜索
+- "项目 / collection" 概念（多 artifact 归类）
+- Office 文件内嵌预览（pptx / docx / xlsx，需 LibreOffice 转换或 Office Online）
+
+均不阻塞 v1 核心功能。
+
 ---
 
 ## C. 设计 trade-off（接受但需明确）
