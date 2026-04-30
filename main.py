@@ -14,7 +14,7 @@ from agent.core import (
     init_store,
 )
 from agent.user_space import UserSpace
-from api import chat, skills
+from api import artifacts, chat, skills
 
 cfg = load_config()
 
@@ -44,6 +44,7 @@ app.add_middleware(
 
 app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
 app.include_router(skills.router, prefix="/api/skills", tags=["skills"])
+app.include_router(artifacts.router, prefix="/api/artifacts", tags=["artifacts"])
 
 # 前端静态文件（构建后）
 frontend_dist = Path("frontend/dist")
