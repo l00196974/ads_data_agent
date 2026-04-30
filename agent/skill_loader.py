@@ -31,8 +31,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import shlex
 import sys
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -145,8 +147,15 @@ def _make_run_tool(commands: dict[str, Path], workdirs: dict[str, Path]) -> Stru
 
         out = stdout.decode("utf-8", errors="replace")
         err = stderr.decode("utf-8", errors="replace")
+
+        artifact_ids, err_clean = _extract_artifact_ids(err)
+        if artifact_ids:
+            existing = list(_pending_artifact_ids.get())
+            existing.extend(artifact_ids)
+            _pending_artifact_ids.set(existing)
+
         if proc.returncode != 0:
-            return f"[exit {proc.returncode}] {subcmd}\nstderr:\n{err}\nstdout:\n{out}"
+            return f"[exit {proc.returncode}] {subcmd}\nstderr:\n{err_clean}\nstdout:\n{out}"
         return out
 
     return StructuredTool.from_function(
@@ -241,3 +250,27 @@ def load_md_skills(
         tools=[_make_run_tool(commands, workdirs)],
         summaries=summaries,
     )
+
+
+_ARTIFACT_NOTIFICATION_PATTERN = re.compile(
+    r"<<<ADS_AGENT:ARTIFACT_UPDATED:artifact_id=([^>]+)>>>"
+)
+
+
+def _extract_artifact_ids(text: str) -> tuple[list[str], str]:
+    """从文本里抽所有 artifact_id 通知行，返 (ids, cleaned_text)。"""
+    ids = _ARTIFACT_NOTIFICATION_PATTERN.findall(text)
+    cleaned = _ARTIFACT_NOTIFICATION_PATTERN.sub("", text)
+    return ids, cleaned
+
+
+_pending_artifact_ids: ContextVar[list[str]] = ContextVar(
+    "_pending_artifact_ids", default=[]
+)
+
+
+def consume_pending_artifact_ids() -> list[str]:
+    """Runner 在每次 LLM 工具调用结束后调一次，获取本次产生的 artifact id 并清空。"""
+    ids = list(_pending_artifact_ids.get())
+    _pending_artifact_ids.set([])
+    return ids
