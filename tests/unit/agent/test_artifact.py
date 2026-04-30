@@ -36,3 +36,22 @@ def test_artifact_id_is_sortable_by_time(tmp_path: Path):
     time.sleep(1.1)
     art2 = Artifact.create(user_id="u", title="t", slug="x", artifacts_root=tmp_path)
     assert art1.artifact_id < art2.artifact_id
+
+
+def test_invalid_slug_patterns(tmp_path: Path):
+    """slug 校验拒绝非法模式。"""
+    import pytest
+
+    invalid_cases = [
+        "-leading",         # 开头连字符
+        "trailing-",        # 结尾连字符
+        "double--dash",     # 连续连字符
+        "UPPERCASE",        # 大写
+        "special_char",     # 下划线
+        "",                 # 空字符串
+    ]
+    for slug in invalid_cases:
+        with pytest.raises(ValueError, match="非法 slug"):
+            Artifact.create(
+                user_id="u", title="t", slug=slug, artifacts_root=tmp_path
+            )
