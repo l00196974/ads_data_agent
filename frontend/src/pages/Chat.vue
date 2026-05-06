@@ -74,12 +74,11 @@
             </span>
           </span>
           <span v-if="latestMetrics.context_used_pct != null" class="metric-context"
-                :title="contextTooltip">
+                @mouseenter="ctxPopoverVisible = true"
+                @mouseleave="ctxPopoverVisible = false">
             <span class="ctx-label">🧠 上下文</span>
             <span class="ctx-bar" :class="ctxOverallLevelClass(latestMetrics.context_used_pct)">
-              <!-- 4 段堆叠：system / tool_results / history / current。
-                   宽度按"占阈值的 %"算（与外层进度条同基准），加起来 = 当前 ctx_used_pct。
-                   没有 breakdown 时退化为单段（旧行为）。 -->
+              <!-- 4 段堆叠：system / tool_results / history / current -->
               <template v-if="contextSegments">
                 <span v-for="seg in contextSegments" :key="seg.key"
                       :class="['ctx-seg', `ctx-seg-${seg.key}`]"
@@ -90,6 +89,31 @@
                     :style="{ width: Math.min(100, latestMetrics.context_used_pct) + '%' }"></span>
             </span>
             <span class="ctx-pct">{{ latestMetrics.context_used_pct.toFixed(1) }}%</span>
+
+            <!-- 自定义 popover：原生 title 多行显示在不同浏览器不一致，且无法显示
+                 配色样式；自己渲染一个深色面板能保证 breakdown 4 段都看得到 -->
+            <div v-if="ctxPopoverVisible" class="ctx-popover" @mouseenter.stop>
+              <div class="ctx-popover-head">
+                <span>当前轮上下文</span>
+                <strong>{{ formatTokens(latestMetrics.input_tokens) }} / {{ formatTokens(latestMetrics.context_trigger) }}</strong>
+                <span class="ctx-popover-pct">{{ latestMetrics.context_used_pct.toFixed(1) }}%</span>
+              </div>
+              <div class="ctx-popover-divider"></div>
+              <template v-if="contextSegments && contextSegments.length">
+                <div class="ctx-popover-section">各部分占用（tiktoken 估算 ±5%）</div>
+                <div v-for="seg in contextSegments" :key="seg.key" class="ctx-popover-row">
+                  <span :class="['ctx-popover-dot', `ctx-seg-${seg.key}`]"></span>
+                  <span class="ctx-popover-label">{{ SEGMENT_LABELS[seg.key] }}</span>
+                  <span class="ctx-popover-value">{{ formatTokens(seg.tokens) }}</span>
+                  <span class="ctx-popover-share">{{ seg.widthPct.toFixed(1) }}%</span>
+                </div>
+              </template>
+              <div v-else class="ctx-popover-empty">
+                breakdown 数据暂不可用（tiktoken 未生效或本轮无 messages）
+              </div>
+              <div class="ctx-popover-divider"></div>
+              <div class="ctx-popover-hint">超过 100% 触发自动压缩 SummarizationMiddleware</div>
+            </div>
           </span>
         </div>
 
@@ -315,25 +339,8 @@ const contextSegments = computed(() => {
     .filter(s => s.tokens > 0)
 })
 
-const contextTooltip = computed(() => {
-  const m = latestMetrics.value
-  if (!m) return ''
-  const lines = [
-    `当前轮上下文 ${formatTokens(m.input_tokens)} / 阈值 ${formatTokens(m.context_trigger)}（${m.context_used_pct.toFixed(1)}%）`,
-    '超过 100% 触发自动压缩（SummarizationMiddleware）',
-  ]
-  if (m.breakdown) {
-    lines.push('')
-    lines.push('── 各部分占用（tiktoken 估算，与厂商 ±5%）──')
-    for (const key of ['system', 'tool_results', 'history', 'current']) {
-      const t = m.breakdown[key] || 0
-      if (t > 0) {
-        lines.push(`  ${SEGMENT_LABELS[key]}: ${formatTokens(t)} tokens`)
-      }
-    }
-  }
-  return lines.join('\n')
-})
+// 上下文 breakdown 自定义 popover 显示状态
+const ctxPopoverVisible = ref(false)
 const cacheTitle = computed(() => {
   const m = latestMetrics.value
   if (!m) return ''
@@ -968,11 +975,95 @@ function logout() {
   margin-left: 2px;
 }
 .metric-context {
+  position: relative;       /* popover 绝对定位锚点 */
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  margin-left: auto;  /* 推到右边 */
+  margin-left: auto;        /* 推到右边 */
   cursor: help;
+  padding: 4px 0;           /* 加大 hover 命中区，避免鼠标在元素间隙时 popover 闪烁 */
+}
+
+/* 上下文 breakdown 自定义 popover */
+.ctx-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 100;
+  background: #1f2937;
+  color: #f3f4f6;
+  padding: 14px 16px;
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 1.6;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  min-width: 320px;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, "Cascadia Mono", Menlo, monospace;
+}
+.ctx-popover-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.ctx-popover-head strong {
+  font-size: 13px;
+  color: #fff;
+}
+.ctx-popover-pct {
+  margin-left: auto;
+  font-weight: 600;
+  color: #60a5fa;
+}
+.ctx-popover-divider {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.1);
+  margin: 10px -4px;
+}
+.ctx-popover-section {
+  font-size: 11px;
+  color: #9ca3af;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+}
+.ctx-popover-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+}
+.ctx-popover-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+.ctx-popover-label {
+  flex: 1;
+  color: #e5e7eb;
+}
+.ctx-popover-value {
+  color: #fff;
+  font-weight: 500;
+  min-width: 50px;
+  text-align: right;
+}
+.ctx-popover-share {
+  color: #9ca3af;
+  min-width: 50px;
+  text-align: right;
+}
+.ctx-popover-empty {
+  padding: 8px 0;
+  color: #fca5a5;
+  font-size: 11px;
+}
+.ctx-popover-hint {
+  font-size: 11px;
+  color: #9ca3af;
+  font-family: 'Inter', sans-serif;
 }
 .ctx-label {
   font-size: 11px;
