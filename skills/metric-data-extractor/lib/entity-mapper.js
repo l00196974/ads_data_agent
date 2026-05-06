@@ -135,11 +135,14 @@ class EntityMapper {
   mapMetric(input) {
     const target = normalize(input);
 
+    // 第一遍：精确匹配（code / name / alias）。
+    // 拆两阶段是为了避免边扫边 return 导致 fuzzy 抢在精确匹配之前命中——
+    // 实测过 mediaName=HUAWEI Browser 被前一行 desc 含同样字符的"华为浏览器"
+    // fuzzy 截走的 bug。
     for (const row of this.metricsConfig) {
       if (normalize(row.metric_code) === target || normalize(row.metric_name) === target) {
         return { value: row.metric_code };
       }
-
       // 读 CSV 的 metric_aliases 列（逗号或全角逗号分隔）—— 单一数据源，
       // 别名在 CSV 里更新即生效，不再依赖代码里 hardcoded 的 alias 表。
       const aliases = String(row.metric_aliases || '')
@@ -149,7 +152,10 @@ class EntityMapper {
       if (aliases.includes(target)) {
         return { value: row.metric_code };
       }
+    }
 
+    // 第二遍：模糊匹配（仅在精确未命中时启用）
+    for (const row of this.metricsConfig) {
       if (fuzzyContains(target, row.metric_name)) {
         return { value: row.metric_code };
       }
@@ -193,11 +199,14 @@ class EntityMapper {
       return { value: aliasMap[input] };
     }
 
+    // 第一遍：精确匹配
     for (const row of this.dimensionsConfig) {
       if (normalize(row.dimension_code) === target || normalize(row.dimension_name) === target) {
         return { value: row.dimension_code };
       }
-
+    }
+    // 第二遍：fuzzy
+    for (const row of this.dimensionsConfig) {
       if (fuzzyContains(target, row.dimension_name)) {
         return { value: row.dimension_code };
       }
@@ -210,6 +219,10 @@ class EntityMapper {
     const target = normalize(input);
     const candidates = this.dimensionValuesConfig.filter((row) => row.dimension_code === dimensionCode);
 
+    // 第一遍：精确匹配（value / value_desc / aliases）。
+    // **必须先精确扫完整张表再 fuzzy** —— 否则前面行的 desc 可能含其他行的
+    // 真实 value（如 mediaName 第一行 desc 含 "HUAWEI Browser"），把后面的
+    // 精确匹配劫走。
     for (const row of candidates) {
       if (normalize(row.value) === target || normalize(row.value_desc) === target) {
         return { valueCode: row.value, valueName: row.value_desc };
@@ -223,7 +236,10 @@ class EntityMapper {
       if (aliases.includes(target)) {
         return { valueCode: row.value, valueName: row.value_desc };
       }
+    }
 
+    // 第二遍：fuzzy（仅在精确未命中时启用）
+    for (const row of candidates) {
       if (fuzzyContains(target, row.value_desc)) {
         return { valueCode: row.value, valueName: row.value_desc };
       }
