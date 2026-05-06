@@ -10,7 +10,7 @@ positionId,版位id,版位id，标识符类维度,版位id,"position_001,positio
 slotId,广告位id,广告位id，标识符类维度,广告位id,"slot_001,slot_002(格式:slot_xxx)",id
 priceType,计费方式,计费方式（出价策略），枚举类维度，值固定。注意：CPM计费方式可能是竞价或合约，区分竞价和合约请使用promotionType（采买模式）,"计费方式,计费类型,出价方式","CPC,CPM,CPA,oCPC,oCPM,CPT,CPD,CPI,CPS",enum
 adGroupName,任务名称,任务名称，自由文本类维度,"任务名称,任务,task_name","问界M7推广任务01,元保车险推广任务01(示例)",string
-mediaName,媒体名称,媒体名称，半枚举类维度，常见值有限但可扩展。**重要**：华为浏览器在不同数据中可能显示为"华为浏览器"或"HUAWEI Browser"，查询时需要同时包含这两个值才能获取完整数据。"媒体名称,媒体,media","华为浏览器,HUAWEI Browser,华为视频,华为音乐,华为阅读,华为应用市场,等",semi-enum
+mediaName,媒体名称,"媒体名称，半枚举类维度，常见值有限但可扩展。**重要**：华为浏览器在不同数据中可能显示为""华为浏览器""或""HUAWEI Browser""，查询时需要同时包含这两个值才能获取完整数据。","媒体名称,媒体,media","华为浏览器,HUAWEI Browser,华为视频,华为音乐,华为阅读,华为应用市场,等",semi-enum
 adGroupStatus,任务状态,任务状态，枚举类维度，值固定,"任务状态,状态","运行中,已暂停,已结束,待审核",enum
 corpId,广告主id,广告主id，标识符类维度,"广告主ID,广告主id","corp_001,corp_002(格式:corp_xxx)",id
 mediaType,媒体分类,媒体分类，半枚举类维度，常见值有限但可扩展,"媒体分类,媒体类型","视频,资讯,音乐,阅读,游戏,浏览器,应用市场,等",semi-enum

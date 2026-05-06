@@ -60,10 +60,16 @@ class SkillsPackage:
 
 
 def _parse_frontmatter(content: str) -> tuple[dict, str]:
-    """Split a Markdown file with YAML frontmatter into (config, body)."""
-    if not content.startswith("---"):
+    """Split a Markdown file with YAML frontmatter into (config, body).
+
+    容忍前导空白（空行、UTF-8 BOM）：很多编辑器 / 上游同步工具会在文件头加空行，
+    严格要求 `content.startswith("---")` 会导致整个 frontmatter 被静默忽略，
+    最终前端看到 description 是空——上游用户很难察觉。
+    """
+    stripped = content.lstrip("﻿").lstrip()
+    if not stripped.startswith("---"):
         return {}, content
-    parts = content.split("---", 2)
+    parts = stripped.split("---", 2)
     if len(parts) < 3:
         return {}, content
     config = yaml.safe_load(parts[1]) or {}

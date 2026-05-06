@@ -59,10 +59,24 @@ class EntityMapper {
         continue;
       }
 
-      const values = Array.isArray(rawValue) ? rawValue : [rawValue];
+      // query-metrics 把 --filters 解析成 `{oper, values}` 字典；
+      // 但也兼容历史调用方传入数组或单值。三种形态都解出 (inputOper, valueList)。
+      // 关键：必须保留用户传入的 oper（GT/LIKE/IN/BETWEEN 等），
+      // 之前硬编码 'EQUAL' 会让 `--filters "cost=gt:1000"` 被改成 EQUAL 1000，是真实 bug。
+      let inputOper = 'EQUAL';
+      let valueList;
+      if (Array.isArray(rawValue)) {
+        valueList = rawValue;
+      } else if (rawValue !== null && typeof rawValue === 'object' && 'values' in rawValue) {
+        valueList = Array.isArray(rawValue.values) ? rawValue.values : [];
+        if (rawValue.oper) inputOper = rawValue.oper;
+      } else {
+        valueList = [rawValue];
+      }
+
       const resolvedValues = [];
 
-      for (const value of values) {
+      for (const value of valueList) {
         const mappedValue = this.mapDimensionValue(mappedDimension.value, value);
         if (mappedValue.error) {
           result.errors.push({
@@ -77,10 +91,13 @@ class EntityMapper {
         resolvedValues.push(mappedValue.valueCode);
       }
 
-      if (resolvedValues.length > 0) {
+      // 空值运算符（IS NULL / IS NOT NULL）即使 resolvedValues 空也要保留——
+      // 它的语义就是不需要值。
+      const isNullOper = inputOper === 'IS NULL' || inputOper === 'IS NOT NULL';
+      if (resolvedValues.length > 0 || isNullOper) {
         result.filters[mappedDimension.value] = {
           source: mappedDimension.value,
-          oper: 'EQUAL',
+          oper: inputOper,
           targetValue: resolvedValues,
         };
       }
@@ -97,28 +114,24 @@ class EntityMapper {
         return { value: row.metric_code };
       }
 
+      // 读 CSV 的 metric_aliases 列（逗号或全角逗号分隔）—— 单一数据源，
+      // 别名在 CSV 里更新即生效，不再依赖代码里 hardcoded 的 alias 表。
+      const aliases = String(row.metric_aliases || '')
+        .split(/[,，]/)
+        .map((a) => normalize(a))
+        .filter(Boolean);
+      if (aliases.includes(target)) {
+        return { value: row.metric_code };
+      }
+
       if (normalize(row.metric_name).includes(target) || target.includes(normalize(row.metric_name))) {
         return { value: row.metric_code };
       }
     }
 
-    const aliasMap = {
-      消耗: 'cost',
-      花费: 'cost',
-      成本: 'cost',
-      线索: 'leads',
-      曝光: 'impressions',
-      展现: 'impressions',
-      点击: 'clicks',
-      点击率: 'ctr',
-      转化率: 'cvr',
-      转化: 'conversions',
-    };
-
-    if (aliasMap[input]) {
-      return { value: aliasMap[input] };
-    }
-
+    // 旧的 hardcoded aliasMap 已删——它把"曝光→impressions"等错误映射成
+    // metrics.csv 里**不存在**的 code，导致 LLM 传中文时 mapper 返回根本
+    // 调不通的 metric。CSV 的 metric_aliases 列是唯一可信来源。
     return { error: true };
   }
 

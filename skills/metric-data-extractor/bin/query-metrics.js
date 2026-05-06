@@ -294,16 +294,26 @@ async function main() {
       secret: cfg.HUAWEI_ADS_SECRET,
     });
 
-    // 打印请求JSON
-    console.error('=== REQUEST JSON ===');
-    console.error(JSON.stringify(requestBody, null, 2));
+    // 调试日志：默认只打摘要（避免单次响应几千行 JSON 淹没 backend 日志 + tool_outputs 文件膨胀）
+    // --debug 打开后输出完整 REQUEST/RESPONSE，排查问题时使用
+    const debug = args.debug === true || args.debug === 'true' || args.debug === '1';
+    if (debug) {
+      console.error('=== REQUEST JSON ===');
+      console.error(JSON.stringify(requestBody, null, 2));
+    } else {
+      console.error(`[query-metrics] indicators=${(requestBody.indicators || []).map(i => i.indicatorKey).join(',')} dims=${(requestBody.dimensions || []).join(',') || '-'} timing=${requestBody.timingDimension || '-'} filters=${(requestBody.filterConditions || []).length}`);
+    }
 
     const response = await client.query(requestBody);
     const payload = response.data.data;
 
-    // 打印响应JSON
-    console.error('=== RESPONSE JSON ===');
-    console.error(JSON.stringify(payload, null, 2));
+    if (debug) {
+      console.error('=== RESPONSE JSON ===');
+      console.error(JSON.stringify(payload, null, 2));
+    } else {
+      const rowCount = Array.isArray(payload.data) ? payload.data.length : 0;
+      console.error(`[query-metrics] rows=${rowCount} total=${payload.total || rowCount}`);
+    }
 
     if (Array.isArray(payload.data) && payload.data.length > MAX_ROWS_RETURNED) {
       payload.data = payload.data.slice(0, MAX_ROWS_RETURNED);
