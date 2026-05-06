@@ -20,6 +20,13 @@ def _build_model(cfg: AppConfig) -> ChatOpenAI:
     kwargs = {
         "model": llm.model,
         "api_key": llm.api_key or "sk-placeholder",
+        # OpenAI / OpenAI-compat 在 stream 模式下默认**不返回 usage**——必须显式
+        # 开启 stream_options={"include_usage": True}（langchain ChatOpenAI 暴露成
+        # stream_usage 参数）。不开的话每次 LLM 调用 usage_metadata 都是 None，
+        # runner 推 metrics 时 input/output tokens 全空，前端只能显示 "-"。
+        # 兼容性：所有主流 OpenAI-compat 厂商（火山方舟 / DeepSeek / 通义 / OpenAI 自家）
+        # 都支持这个 stream option；个别小厂商代理可能忽略，但开了不会报错。
+        "stream_usage": True,
     }
     if llm.base_url:
         kwargs["base_url"] = llm.base_url

@@ -24,3 +24,7 @@ class SkillCreateRequest(BaseModel):
     name: str
     description: str
     code: str
+
+
+class RenameConversationRequest(BaseModel):
+    title: str

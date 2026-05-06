@@ -158,6 +158,92 @@ def test_token_stream_passes_through():
     assert emitted[0]["data"] == {"token": "hello"}
 
 
+def test_metrics_event_emitted_on_chat_model_end():
+    """on_chat_model_end 时 runner 应推一条 metrics SSE event，含厂商 usage_metadata。
+    锁住：input/output/total tokens、tps（runner 自测）、context_used_pct（按阈值算）都正确传出。"""
+    output_mock = MagicMock()
+    output_mock.usage_metadata = {
+        "input_tokens": 12000,
+        "output_tokens": 200,
+        "total_tokens": 12200,
+        "input_token_details": {"cache_read": 8000},
+    }
+    output_mock.tool_calls = []
+    output_mock.response_metadata = {"model_name": "gpt-4o"}
+    emitted = _run_with_events([
+        {"event": "on_chat_model_start", "data": {"input": {}}, "run_id": "r1", "metadata": {}},
+        {"event": "on_chat_model_end", "data": {"output": output_mock}, "run_id": "r1", "metadata": {}},
+    ])
+    metrics_events = [e for e in emitted if e["event"] == "metrics"]
+    assert len(metrics_events) == 1
+    m = metrics_events[0]["data"]
+    assert m["input_tokens"] == 12000
+    assert m["output_tokens"] == 200
+    assert m["total_tokens"] == 12200
+    assert m["cache_read_tokens"] == 8000
+    assert m["model"] == "gpt-4o"
+    # context 进度按 trigger（默认 80000）算
+    # 12000 / 80000 * 100 = 15.0
+    assert abs(m["context_used_pct"] - 15.0) < 0.01
+    assert m["call_seq"] == 1
+    assert m["subagent"] is None  # 主 Agent
+
+
+def test_metrics_subagent_field_set_inside_task():
+    """子 Agent 内部的 LLM 调用，metrics.subagent = 子 Agent name。"""
+    output_mock = MagicMock()
+    output_mock.usage_metadata = {"input_tokens": 5000, "output_tokens": 100, "total_tokens": 5100}
+    output_mock.tool_calls = []
+    output_mock.response_metadata = {}
+    # task 工具压栈 → 内部 chat_model_start/end → task tool_end 弹栈
+    emitted = _run_with_events([
+        {"event": "on_tool_start", "name": "task", "data": {"input": {"subagent_type": "data-analyst"}}},
+        {"event": "on_chat_model_start", "data": {"input": {}}, "run_id": "r2", "metadata": {}},
+        {"event": "on_chat_model_end", "data": {"output": output_mock}, "run_id": "r2", "metadata": {}},
+        {"event": "on_tool_end", "name": "task", "data": {}},
+    ])
+    metrics_events = [e for e in emitted if e["event"] == "metrics"]
+    assert len(metrics_events) == 1
+    assert metrics_events[0]["data"]["subagent"] == "data-analyst"
+
+
+def test_metrics_handles_missing_usage_gracefully():
+    """少数 OpenAI-compat 厂商不上报 usage_metadata —— 不能让 runner 崩；metrics 字段 None。"""
+    output_mock = MagicMock()
+    output_mock.usage_metadata = None  # 模拟厂商不上报
+    output_mock.tool_calls = []
+    output_mock.response_metadata = {}
+    emitted = _run_with_events([
+        {"event": "on_chat_model_start", "data": {"input": {}}, "run_id": "r3", "metadata": {}},
+        {"event": "on_chat_model_end", "data": {"output": output_mock}, "run_id": "r3", "metadata": {}},
+    ])
+    metrics_events = [e for e in emitted if e["event"] == "metrics"]
+    assert len(metrics_events) == 1
+    m = metrics_events[0]["data"]
+    assert m["input_tokens"] is None
+    assert m["output_tokens"] is None
+    assert m["tps"] is None
+    assert m["context_used_pct"] is None  # 缺 input_tokens 时不算
+
+
+def test_ttft_recorded_on_first_stream_chunk():
+    """on_chat_model_stream 的第一个 chunk 应该让 metrics.ttft_ms 被填上（非 None）。"""
+    chunk_mock = MagicMock()
+    chunk_mock.content = "hi"
+    output_mock = MagicMock()
+    output_mock.usage_metadata = {"input_tokens": 100, "output_tokens": 5, "total_tokens": 105}
+    output_mock.tool_calls = []
+    output_mock.response_metadata = {}
+    emitted = _run_with_events([
+        {"event": "on_chat_model_start", "data": {"input": {}}, "run_id": "r4", "metadata": {}},
+        {"event": "on_chat_model_stream", "data": {"chunk": chunk_mock}, "run_id": "r4", "metadata": {}},
+        {"event": "on_chat_model_end", "data": {"output": output_mock}, "run_id": "r4", "metadata": {}},
+    ])
+    metrics = next(e["data"] for e in emitted if e["event"] == "metrics")
+    assert metrics["ttft_ms"] is not None
+    assert metrics["ttft_ms"] >= 0  # 测试机执行很快，0 也允许
+
+
 def test_no_task_update_events_emitted():
     """Append-only model: runner never emits task_update — that whole layer
     is gone. Frontend infers nothing from these events anymore."""

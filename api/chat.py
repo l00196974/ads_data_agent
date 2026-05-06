@@ -1,10 +1,18 @@
 import asyncio
+from datetime import datetime
 from uuid import uuid4
+
+try:
+    from zoneinfo import ZoneInfo
+    _TZ = ZoneInfo("Asia/Shanghai")
+except Exception:
+    _TZ = None
 
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
-from agent import auto_approve
+from agent import auto_approve, conversation_events, conversation_meta, conversation_metrics
+from agent.checkpointer import get_checkpointer
 from agent.config import load_config
 from agent.core import build_agent
 from agent.session import SessionManager
@@ -16,7 +24,13 @@ from api.channel import (
     agent_runner,
     channel_registry,
 )
-from api.models import AppendRequest, ChatRequest, ConfirmRequest, SkillCreateRequest
+from api.models import (
+    AppendRequest,
+    ChatRequest,
+    ConfirmRequest,
+    RenameConversationRequest,
+    SkillCreateRequest,
+)
 
 router = APIRouter()
 session_mgr = SessionManager()
@@ -90,6 +104,26 @@ PLAN_INSTRUCTION = """## 执行流程（严格遵守）
 """
 
 
+_WEEKDAY_CN = "一二三四五六日"
+
+
+def _today_context() -> str:
+    """运行时的"今天是几号"——LLM 默认不知道当前日期，相对时间（"最近一个月"
+    / "上周" / "昨天"）必须以这个为基准计算，否则会用训练截止日期答错。"""
+    now = datetime.now(_TZ) if _TZ else datetime.now()
+    return (
+        "## 当前时间\n"
+        f"今天是 **{now.strftime('%Y年%m月%d日')}**（`{now.strftime('%Y-%m-%d')}`，"
+        f"星期{_WEEKDAY_CN[now.weekday()]}）。\n"
+        "用户提到的相对时间一律以此为基准换算：\n"
+        "- \"最近一个月\" / \"近30天\" → `start = today - 30d, end = today`\n"
+        "- \"上个月\" → 上一个自然月（1日 ~ 月末）\n"
+        "- \"本月\" → 本月 1 日 ~ today\n"
+        "- \"昨天\" → today - 1d\n"
+        "- \"上周\" → 上一个自然周（周一 ~ 周日）\n"
+    )
+
+
 def _make_build_fn(user_id: str):
     us = UserSpace(user_id, cfg.persistence.data_dir)
     # 把 user_id + artifacts_root 传给 skill_loader——run_command 内部为每次工具调用
@@ -104,7 +138,8 @@ def _make_build_fn(user_id: str):
     )
 
     # SKILL.md 全文塞进 system prompt，LLM 直接看 CLI 用法
-    system_prompt = PLAN_INSTRUCTION + "\n\n" + us.get_agents_md()
+    # 当前日期放最前面——LLM 必须先知道"今天是几号"，才能正确解析"最近一个月"等相对时间
+    system_prompt = _today_context() + "\n\n" + PLAN_INSTRUCTION + "\n\n" + us.get_agents_md()
     if md_pkg.prompt_addition:
         system_prompt += "\n\n" + md_pkg.prompt_addition
 
@@ -139,8 +174,16 @@ async def chat(user_id: str, req: ChatRequest):
     session_id = f"{user_id}_{uuid4().hex[:8]}"
     conversation_id = req.conversation_id or uuid4().hex[:12]
     queue: asyncio.Queue = asyncio.Queue()
-    channel = WebSSEChannel(user_id, session_id, queue)
+    channel = WebSSEChannel(user_id, session_id, queue, conversation_id=conversation_id)
+    # 每次新一轮发问 = 新 turn_id；channel 写 step / artifact_updated 事件时按
+    # turn_id 分组，前端拉历史时能正确把"思考分组"插到对应 user/ai 之间。
+    turn_id = uuid4().hex[:12]
+    channel.set_turn_id(turn_id)
     channel_registry.register(session_id, channel)
+
+    # 写会话元数据：首次发消息 → INSERT（标题取 message 前 20 字），
+    # 后续 → UPDATE last_active_at + message_count++（同时清归档状态）。
+    conversation_meta.upsert(user_id, conversation_id, req.message)
 
     build_fn = _make_build_fn(user_id)
     config = session_mgr.get_config(user_id, conversation_id)
@@ -258,7 +301,12 @@ async def append_message(user_id: str, req: AppendRequest):
         except (asyncio.CancelledError, asyncio.TimeoutError):
             pass
 
-    # 2. 在同 channel/thread 上启动新一轮——LLM 看完整历史 + 新追问
+    # 2. 同 channel 复用，但要刷新 turn_id——新一轮发问的 step 事件要按新 turn_id 分组
+    turn_id = uuid4().hex[:12]
+    active["channel"].set_turn_id(turn_id)
+    conversation_meta.upsert(user_id, req.conversation_id, req.message)
+
+    # 3. 在同 channel/thread 上启动新一轮——LLM 看完整历史 + 新追问
     new_task = asyncio.create_task(
         agent_runner.run(active["channel"], req.message, active["build_fn"], active["config"])
     )
@@ -274,3 +322,119 @@ async def reset_conversation(user_id: str):
     后续 chat 请求带上它就会进入全新的 langgraph thread。
     旧对话的 sqlite checkpoint 不删除（按 conversation_id 隔离，互不干扰）。"""
     return {"conversation_id": uuid4().hex[:12]}
+
+
+# ==================== 历史会话管理 endpoints ====================
+
+@router.get("/{user_id}/conversations")
+async def list_conversations(user_id: str, archived: bool = False, limit: int = 50):
+    """列出该用户的会话（默认未归档），按 last_active_at 倒序。
+
+    每条会话附带累计 metrics（calls / total_tokens 等），sidebar 显示用。
+    后端用一次 GROUP BY 拿全部用户的 summary（避免 N+1 查询）。
+    """
+    convs = conversation_meta.list_for_user(user_id, archived=archived, limit=limit)
+    summaries = conversation_metrics.summary_for_user_conversations(user_id)
+    for c in convs:
+        c["metrics"] = summaries.get(c["conversation_id"]) or {
+            "calls": 0, "input_tokens": 0, "output_tokens": 0,
+            "total_tokens": 0, "cache_read_tokens": 0, "duration_ms": 0,
+        }
+    return {"conversations": convs}
+
+
+@router.get("/{user_id}/conversations/{conversation_id}/metrics")
+async def get_conversation_metrics(user_id: str, conversation_id: str):
+    """会话内每次 LLM 调用的明细（V2 详情面板画时序图用）。
+    V1 前端先不展开，只用聚合 summary，但 endpoint 留好。"""
+    return {
+        "summary": conversation_metrics.summary_for_conversation(user_id, conversation_id),
+        "calls": conversation_metrics.list_for_conversation(user_id, conversation_id),
+    }
+
+
+@router.get("/{user_id}/conversations/{conversation_id}/messages")
+async def get_conversation_messages(user_id: str, conversation_id: str):
+    """拉取某历史会话的可见消息 + 思考过程事件。
+
+    `messages`: 过滤后的 user/assistant 文本对。**只保留 content 非空的 AIMessage**——
+        中间 tool-calling 的 ai message content 通常为空（工具调用走 tool_calls 字段），
+        会自动被过滤掉，留下的就是每轮最终的 markdown 回复。
+
+    `events`: 按时间顺序的 step / artifact_updated 事件，每条带 turn_id。
+        前端按 turn_id 把事件分组，再插到对应的 user/ai 消息对之间渲染思考分组。
+
+    返回空数组（而非 404）当 thread 在 checkpointer 不存在——可能是 meta 行被
+    手工 INSERT 了但 langgraph 没真跑过，前端按"空对话"渲染即可。
+    """
+    config = session_mgr.get_config(user_id, conversation_id)
+    cp = get_checkpointer()
+    tup = await cp.aget_tuple(config)
+
+    visible_messages: list[dict] = []
+    if tup is not None:
+        channel_values = tup.checkpoint.get("channel_values", {}) or {}
+        raw_messages = channel_values.get("messages", []) or []
+        for m in raw_messages:
+            cls = type(m).__name__
+            content = getattr(m, "content", "")
+            # 多模态 content 可能是 list，目前简化只处理 str
+            if not isinstance(content, str):
+                continue
+            if cls == "HumanMessage":
+                visible_messages.append({"role": "user", "content": content})
+            elif cls == "AIMessage" and content.strip():
+                # 含 tool_calls 的中间 ai 消息 content 通常为空，自然过滤掉；
+                # 留下来的是每轮的最终 markdown 回复
+                visible_messages.append({"role": "assistant", "content": content})
+
+    events = conversation_events.list_for_conversation(user_id, conversation_id)
+    return {"messages": visible_messages, "events": events}
+
+
+@router.patch("/{user_id}/conversations/{conversation_id}")
+async def rename_conversation(user_id: str, conversation_id: str, req: RenameConversationRequest):
+    """重命名会话。失败 = 找不到该 conv（404 风格的 not_found 状态）。"""
+    ok = conversation_meta.rename(user_id, conversation_id, req.title)
+    if not ok:
+        return {"status": "not_found"}
+    return {"status": "ok", "conversation": conversation_meta.get(user_id, conversation_id)}
+
+
+@router.delete("/{user_id}/conversations/{conversation_id}")
+async def archive_conversation(user_id: str, conversation_id: str):
+    """软删：移到已归档分组（仍在 db，可恢复）。"""
+    ok = conversation_meta.archive(user_id, conversation_id)
+    if not ok:
+        return {"status": "not_found_or_already_archived"}
+    return {"status": "archived"}
+
+
+@router.post("/{user_id}/conversations/{conversation_id}/restore")
+async def restore_conversation(user_id: str, conversation_id: str):
+    """从归档恢复。"""
+    ok = conversation_meta.restore(user_id, conversation_id)
+    if not ok:
+        return {"status": "not_found"}
+    return {"status": "ok"}
+
+
+@router.delete("/{user_id}/conversations/{conversation_id}/permanent")
+async def delete_conversation_permanent(user_id: str, conversation_id: str):
+    """硬删：双删 meta + 事件 + checkpointer thread。**不可逆**。
+
+    前端必须在调用前弹"无法恢复"确认框，确认后才走这里。
+    """
+    config = session_mgr.get_config(user_id, conversation_id)
+    cp = get_checkpointer()
+    # langgraph checkpointer 的 adelete_thread 会清掉该 thread 在 checkpoints + writes 表
+    # 的所有行——LLM 之后看不到这段历史
+    try:
+        await cp.adelete_thread(config["configurable"]["thread_id"])
+    except Exception:
+        # checkpointer 不存在该 thread 也无所谓（meta 可能存在但 langgraph 没真跑过）
+        pass
+    conversation_events.delete_for_conversation(user_id, conversation_id)
+    conversation_metrics.delete_for_conversation(user_id, conversation_id)
+    conversation_meta.delete_permanent(user_id, conversation_id)
+    return {"status": "deleted"}

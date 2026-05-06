@@ -67,6 +67,22 @@ class BaseChannel(ABC):
         Channel 自行决定怎么呈现：WebSSE 推 SSE event；CLI 打印简短通知。
         """
 
+    async def send_metrics(self, metrics: dict) -> None:
+        """LLM 调用 metrics（每次 on_chat_model_end 推一条）。
+
+        metrics 字段约定（runner 构造，见 api/channel/runner.py）：
+            input_tokens / output_tokens / total_tokens / cache_read_tokens
+            duration_ms / ttft_ms / tps
+            context_used_pct  (input / summarization_trigger * 100)
+            subagent          (None = 主 Agent)
+            model             (LLM 模型名)
+            call_seq          (该 turn 内第几次 LLM 调用)
+
+        默认实现 = no-op，channel 按需 override（WebSSE 推 SSE event 给前端
+        实时更新顶部状态栏；CLI 可以 print 一行）。设计成 non-abstract 方便
+        旧 channel / 测试 mock 不强制实现。
+        """
+
     @abstractmethod
     async def wait_for_confirm(
         self,

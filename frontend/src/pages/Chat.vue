@@ -10,6 +10,15 @@
     </header>
 
     <div class="main">
+      <!-- 最左侧：历史会话 sidebar -->
+      <ConversationSidebar
+        ref="sidebarRef"
+        :user-id="userId"
+        :current-conversation-id="conversationId"
+        @select="selectConversation"
+        @new-conversation="clearChat"
+      />
+
       <!-- 左侧 Skills 面板 -->
       <aside class="skill-panel">
         <div class="panel-title">已注册能力</div>
@@ -56,6 +65,37 @@
             <div class="progress-indicator"></div>
           </div>
           <span class="progress-text"><span class="progress-dot">●</span> {{ progressText }}</span>
+        </div>
+
+        <!-- LLM metrics 实时栏：每次 on_chat_model_end 推一条，覆盖式更新 -->
+        <div v-if="latestMetrics" class="metrics-bar">
+          <span class="metric-item" :title="metricsTitleSubagent">
+            <template v-if="latestMetrics.subagent">🤖 {{ subagentLabel(latestMetrics.subagent) }}</template>
+            <template v-else>🧑 主 Agent</template>
+          </span>
+          <span v-if="latestMetrics.model" class="metric-item metric-model" :title="`模型：${latestMetrics.model}`">
+            {{ latestMetrics.model }}
+          </span>
+          <span class="metric-item" :title="cacheTitle">
+            📥 {{ formatTokens(latestMetrics.input_tokens) }}
+            <span v-if="latestMetrics.cache_read_tokens" class="metric-cache">(缓存 {{ formatTokens(latestMetrics.cache_read_tokens) }})</span>
+          </span>
+          <span class="metric-item" title="本轮 LLM 输出 tokens">
+            📤 {{ formatTokens(latestMetrics.output_tokens) }}
+          </span>
+          <span v-if="latestMetrics.tps" class="metric-item" :title="`首 token 延迟 ${latestMetrics.ttft_ms || '-'} ms`">
+            ⚡ {{ latestMetrics.tps.toFixed(1) }} t/s
+          </span>
+          <span v-if="latestMetrics.context_used_pct != null" class="metric-context"
+                :title="`当前轮上下文 ${formatTokens(latestMetrics.input_tokens)} / 阈值 ${formatTokens(latestMetrics.context_trigger)}\n超过 100% 触发自动压缩 (SummarizationMiddleware)`">
+            <span class="ctx-label">🧠 上下文</span>
+            <span class="ctx-bar">
+              <span class="ctx-fill"
+                    :class="ctxLevelClass(latestMetrics.context_used_pct)"
+                    :style="{ width: Math.min(100, latestMetrics.context_used_pct) + '%' }"></span>
+            </span>
+            <span class="ctx-pct">{{ latestMetrics.context_used_pct.toFixed(1) }}%</span>
+          </span>
         </div>
 
         <!-- 消息列表 -->
@@ -154,7 +194,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, nextTick } from 'vue'
+import { ref, computed, onMounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
@@ -163,6 +203,7 @@ import ChartWidget from '../components/ChartWidget.vue'
 import ConfirmDialog from '../components/ConfirmDialog.vue'
 import ArtifactCard from '../components/ArtifactCard.vue'
 import ArtifactBrowser from '../components/ArtifactBrowser.vue'
+import ConversationSidebar from '../components/ConversationSidebar.vue'
 
 const router = useRouter()
 const userId = localStorage.getItem('user_id') || ''
@@ -180,6 +221,7 @@ const fileInputRef = ref(null)
 const uploadStatus = ref('')
 const appendHint = ref(false)
 const messagesEl = ref(null)
+const sidebarRef = ref(null)
 // 当前流式文本气泡在 messages 中的下标。token 累加到这里，非 token 事件复位。
 const currentStreamingIdx = ref(null)
 // 当前思考过程分组在 messages 中的下标。所有 plan/step 事件 append 进这个分组。
@@ -189,6 +231,44 @@ const currentStreamingIdx = ref(null)
 // 真正的回合边界：sendOrAppend 开始时 reset 为 null。
 const currentThinkingIdx = ref(null)
 const progressText = ref('')
+// 最近一次 LLM 调用的 metrics（覆盖式：每次 on_chat_model_end 后端推一条）。
+// 顶部状态栏读取这个对象，反映"当前这一轮"或"最近一轮"的运行状态。
+// 切换会话 / 新对话时 reset 为 null，避免显示别的会话的脏数据。
+const latestMetrics = ref(null)
+
+const SUBAGENT_CN_LABELS = {
+  'data-fetcher': '取数员',
+  'data-analyst': '数据分析师',
+  'issue-diagnostician': '问题诊断师',
+  'general-purpose': '通用助手',
+}
+function subagentLabel(name) {
+  return SUBAGENT_CN_LABELS[name] || name
+}
+function formatTokens(n) {
+  if (n == null) return '-'
+  if (n >= 1000) return (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k'
+  return String(n)
+}
+function ctxLevelClass(pct) {
+  if (pct >= 95) return 'ctx-fill-danger'
+  if (pct >= 80) return 'ctx-fill-warning'
+  return 'ctx-fill-normal'
+}
+const cacheTitle = computed(() => {
+  const m = latestMetrics.value
+  if (!m) return ''
+  const cache = m.cache_read_tokens || 0
+  const ratio = m.input_tokens ? (cache * 100 / m.input_tokens).toFixed(0) : 0
+  return `本轮 LLM 输入 tokens (含 prompt cache 命中 ${ratio}%)`
+})
+const metricsTitleSubagent = computed(() => {
+  const m = latestMetrics.value
+  if (!m) return ''
+  return m.subagent
+    ? `本轮指标来自子 Agent：${subagentLabel(m.subagent)}`
+    : '本轮指标来自主 Agent'
+})
 // conversationId: 同一对话内多轮共享，"新对话"按钮重置为 null（后端会生成新 id）
 const conversationId = ref(localStorage.getItem('conversation_id') || null)
 const browsingArtifactId = ref(null)
@@ -404,6 +484,10 @@ async function sendOrAppend() {
         // progress 不进消息流，仅在顶部状态栏短暂展示
         progressText.value = data.message
       },
+      metrics: (data) => {
+        // 覆盖式更新：每次 LLM 调用结束推一条；用户能实时看到 in/out/TPS/上下文进度
+        latestMetrics.value = data
+      },
       interrupt: (data) => {
         closeStreaming()
         closeThinking()
@@ -453,6 +537,91 @@ async function sendOrAppend() {
     }
   }
   isStreaming.value = false
+  // 一轮跑完刷新 sidebar：标题 / last_active_at / message_count 都可能变化
+  sidebarRef.value?.refresh()
+}
+
+// 切换到历史会话：关掉当前 SSE → 拉历史 messages + events → 重建 messages 数组
+async function selectConversation(conv) {
+  if (conv.conversation_id === conversationId.value) return  // 同一个直接 no-op
+  // 关掉当前流（如有），避免事件流入新会话
+  if (isStreaming.value) {
+    sseClient?.abort()
+    isStreaming.value = false
+  }
+  // 清空当前显示
+  messages.value = []
+  progressText.value = ''
+  currentStreamingIdx.value = null
+  currentThinkingIdx.value = null
+  appendHint.value = false
+  latestMetrics.value = null  // 顶部 metrics 栏复位
+
+  try {
+    const resp = await fetch(
+      `/api/chat/${userId}/conversations/${conv.conversation_id}/messages`
+    )
+    const data = await resp.json()
+    messages.value = rebuildMessagesFromHistory(data.messages || [], data.events || [])
+  } catch (e) {
+    console.warn('load conversation failed', e)
+    messages.value = [{ role: 'assistant', type: 'text', content: '加载历史失败' }]
+  }
+  conversationId.value = conv.conversation_id
+  localStorage.setItem('conversation_id', conv.conversation_id)
+  scrollToBottom()
+}
+
+// 把后端返回的 messages + events 重建成前端 messages 数组（与实时模式同 shape）。
+// 配对策略：events 按 turn_id 分组（保持首次出现顺序），第 N 个 turn 的事件对应
+// 第 N 个 user message——chat 入口每次发问生成一个新 turn_id，与 user message
+// 出现顺序天然一一对应。
+function rebuildMessagesFromHistory(rawMessages, events) {
+  const turnGroups = new Map()  // turn_id -> events[]
+  const turnOrder = []           // turn_id 按首次出现顺序
+  for (const e of events) {
+    if (!turnGroups.has(e.turn_id)) {
+      turnGroups.set(e.turn_id, [])
+      turnOrder.push(e.turn_id)
+    }
+    turnGroups.get(e.turn_id).push(e)
+  }
+
+  const out = []
+  let userIdx = 0
+  for (const m of rawMessages) {
+    if (m.role === 'user') {
+      out.push({ role: 'user', type: 'text', content: m.content })
+      // 每个 user 之后插入对应 turn 的思考分组 + artifact card
+      const turnId = turnOrder[userIdx]
+      const turnEvents = turnId ? turnGroups.get(turnId) : []
+      const entries = []
+      const artifacts = []
+      for (const e of turnEvents) {
+        if (e.kind === 'step' && e.payload?.type === 'tool_start') {
+          // 历史回看：直接按 'done' 渲染（不再有"执行中..."状态），保留 ↳ 缩进
+          const indent = e.payload.subagent ? '   ↳ ' : ''
+          entries.push({
+            label: `${indent}${e.payload.msg}`,
+            kind: 'done',
+            subagent: e.payload.subagent || null,
+          })
+        } else if (e.kind === 'artifact_updated') {
+          artifacts.push(e.payload.artifact_id)
+        }
+      }
+      if (entries.length) {
+        out.push({ type: 'thinking', entries, collapsed: true })
+      }
+      for (const aid of artifacts) {
+        out.push({ type: 'artifact', artifactId: aid, action: 'created' })
+      }
+      userIdx++
+    } else if (m.role === 'assistant') {
+      out.push({ role: 'assistant', type: 'text', content: m.content })
+    }
+  }
+  return out
 }
 
 async function handleConfirm(payload) {
@@ -493,6 +662,7 @@ function clearChat() {
   currentThinkingIdx.value = null
   isStreaming.value = false
   appendHint.value = false
+  latestMetrics.value = null  // 顶部 metrics 栏复位——避免显示上一会话的脏数据
   // 切换 conversationId 为 null：下次发请求时后端会创建新 thread，旧对话历史不参与
   conversationId.value = null
   localStorage.removeItem('conversation_id')
@@ -741,6 +911,84 @@ function logout() {
 @keyframes blink {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.2; }
+}
+
+/* LLM metrics 实时栏：每次 on_chat_model_end 覆盖式更新 */
+.metrics-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 20px;
+  background: rgba(250, 252, 255, 0.95);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  font-size: 12px;
+  color: #595959;
+  font-family: ui-monospace, SFMono-Regular, "Cascadia Mono", Menlo, monospace;
+}
+.metric-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.metric-model {
+  background: rgba(199, 0, 11, 0.08);
+  color: #c7000b;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+}
+.metric-cache {
+  color: #389e0d;
+  font-size: 11px;
+  margin-left: 2px;
+}
+.metric-context {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;  /* 推到右边 */
+  cursor: help;
+}
+.ctx-label {
+  font-size: 11px;
+  color: #8c8c8c;
+}
+.ctx-bar {
+  display: inline-block;
+  width: 80px;
+  height: 6px;
+  background: rgba(0, 0, 0, 0.06);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.ctx-fill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+.ctx-fill-normal {
+  background: linear-gradient(90deg, #52c41a, #73d13d);
+}
+.ctx-fill-warning {
+  background: linear-gradient(90deg, #faad14, #ffc53d);
+}
+.ctx-fill-danger {
+  background: linear-gradient(90deg, #ff4d4f, #ff7875);
+  animation: ctx-pulse 1s infinite;
+}
+.ctx-pct {
+  min-width: 38px;
+  text-align: right;
+  font-size: 11px;
+  color: #595959;
+}
+@keyframes ctx-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
 }
 
 .messages {

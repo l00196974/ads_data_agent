@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from datetime import datetime
 
 from langchain_core.messages import HumanMessage
@@ -25,6 +26,49 @@ def _safe_json(obj, max_chars: int = 1500) -> str:
     except Exception:
         s = repr(obj)
     return s if len(s) <= max_chars else s[:max_chars] + f"...<+{len(s)-max_chars}>"
+
+
+def _extract_usage(output) -> dict:
+    """从 on_chat_model_end 的 output 拿 usage_metadata。
+
+    output 可能是 AIMessage 或 dict（不同 langchain 版本 / chunk 结构不一）。
+    缺字段时返回 {}—— 少数 OpenAI-compat 厂商不上报 usage，前端按"-"显示。
+    cache_read_tokens 走 langchain 标准的 input_token_details.cache_read（多数厂商都填）。
+    """
+    if output is None:
+        return {}
+    usage = getattr(output, "usage_metadata", None)
+    if usage is None and isinstance(output, dict):
+        usage = output.get("usage_metadata")
+    if not usage:
+        return {}
+    try:
+        details = usage.get("input_token_details") or {}
+        cache_read = details.get("cache_read", 0) if isinstance(details, dict) else 0
+    except Exception:
+        cache_read = 0
+    return {
+        "input_tokens": usage.get("input_tokens"),
+        "output_tokens": usage.get("output_tokens"),
+        "total_tokens": usage.get("total_tokens"),
+        "cache_read_tokens": cache_read,
+    }
+
+
+def _extract_model_name(metadata: dict, output) -> str | None:
+    """从 langgraph event metadata 或 AIMessage.response_metadata 拿模型名。"""
+    if isinstance(metadata, dict):
+        # langgraph 把 model_name / ls_model_name 塞进 metadata
+        for k in ("ls_model_name", "model_name"):
+            v = metadata.get(k)
+            if v:
+                return str(v)
+    if output is None:
+        return None
+    rm = getattr(output, "response_metadata", None)
+    if isinstance(rm, dict):
+        return rm.get("model_name") or rm.get("model")
+    return None
 
 
 # deepagents 默认 middleware 注入的"自我管理"工具——对最终用户而言不是业务进度，
@@ -244,6 +288,11 @@ class AgentRunner:
         # 实在配不上才退化到 tool_name 本身。run_id 在 langgraph v2 stream 里是稳定的。
         tool_calls_inflight: dict[str, dict] = {}
         chat_model_calls = 0
+        # run_id → { t_start, ttft_ms, call_seq, subagent }——LLM metrics 配对所需。
+        # on_chat_model_start 写入，stream 第一个 chunk 记 ttft，end 时取出 + 推 send_metrics。
+        chat_calls_inflight: dict[str, dict] = {}
+        # context 进度条所需阈值——SummarizationMiddleware 的 trigger，超过即压缩
+        summarization_trigger = cfg.agent.long_context.summarization_trigger_tokens or 0
         # 子 Agent 嵌套栈：on_tool_start tool=task 时压栈（subagent_type），on_tool_end
         # 时弹栈。栈非空时 = 当前在某个子 Agent 内部，子 Agent 内部触发的所有 step 事件
         # 都会带上栈顶 subagent name，前端据此做嵌套展示。
@@ -269,9 +318,18 @@ class AgentRunner:
                     msgs_count = len(msgs[0]) if msgs and isinstance(msgs, list) and msgs and isinstance(msgs[0], list) else 0
                     metadata = event.get("metadata", {}) or {}
                     node = metadata.get("langgraph_node", "?")
+                    run_id = event.get("run_id", "?")
+                    # 记录 LLM 调用开始时间，等 on_chat_model_end 时算 duration / TPS；
+                    # 第一个 stream chunk 到达时把 ttft_ms 填进来。
+                    chat_calls_inflight[run_id] = {
+                        "t_start": time.perf_counter(),
+                        "ttft_ms": None,
+                        "call_seq": chat_model_calls,
+                        "subagent": subagent_stack[-1] if subagent_stack else None,
+                    }
                     logger.info(
                         "on_chat_model_start #%d node=%s msgs_in_context=%d run_id=%s subagent_ctx=%s",
-                        chat_model_calls, node, msgs_count, event.get("run_id", "?"),
+                        chat_model_calls, node, msgs_count, run_id,
                         subagent_stack[-1] if subagent_stack else "-",
                     )
                     # 子 Agent 内部 LLM 调用：在 thinking 分组里加一条"思考分析中"占位 step。
@@ -299,18 +357,52 @@ class AgentRunner:
                                 for c in tc
                             ]
                     metadata = event.get("metadata", {}) or {}
+                    run_id = event.get("run_id", "?")
+                    inflight = chat_calls_inflight.pop(run_id, {})
+                    # 算 metrics 并推：duration / TPS / context_used_pct + 厂商上报的 usage
+                    t_start = inflight.get("t_start")
+                    elapsed_ms = int((time.perf_counter() - t_start) * 1000) if t_start else None
+                    usage = _extract_usage(output)
+                    out_tokens = usage.get("output_tokens") or 0
+                    tps = (out_tokens * 1000.0 / elapsed_ms) if elapsed_ms and elapsed_ms > 0 and out_tokens else None
+                    in_tokens = usage.get("input_tokens") or 0
+                    ctx_pct = (in_tokens * 100.0 / summarization_trigger) if summarization_trigger and in_tokens else None
+                    metrics_payload = {
+                        "call_seq": inflight.get("call_seq"),
+                        "subagent": inflight.get("subagent"),
+                        "model": _extract_model_name(metadata, output),
+                        "input_tokens": usage.get("input_tokens"),
+                        "output_tokens": usage.get("output_tokens"),
+                        "total_tokens": usage.get("total_tokens"),
+                        "cache_read_tokens": usage.get("cache_read_tokens"),
+                        "duration_ms": elapsed_ms,
+                        "ttft_ms": inflight.get("ttft_ms"),
+                        "tps": round(tps, 2) if tps else None,
+                        "context_used_pct": round(ctx_pct, 2) if ctx_pct else None,
+                        "context_trigger": summarization_trigger or None,
+                    }
                     logger.info(
-                        "on_chat_model_end node=%s tool_calls=%d subagent_ctx=%s %s",
+                        "on_chat_model_end node=%s tool_calls=%d subagent_ctx=%s in=%s out=%s tps=%s ttft=%s ctx=%s%% %s",
                         metadata.get("langgraph_node", "?"),
                         len(tool_calls),
                         subagent_stack[-1] if subagent_stack else "-",
+                        usage.get("input_tokens"), usage.get("output_tokens"),
+                        metrics_payload["tps"], metrics_payload["ttft_ms"], metrics_payload["context_used_pct"],
                         _safe_json(tool_calls, 600),
                     )
+                    # 推 metrics 给 channel —— WebSSE 既推 SSE 也落库；CLI 打印一行
+                    await channel.send_metrics(metrics_payload)
                     # 子 Agent 内部 LLM 调用结束：关闭对应的"思考分析"step
                     if subagent_stack:
                         cn = _SUBAGENT_CN_LABELS.get(subagent_stack[-1], subagent_stack[-1])
                         await channel.send_step(f"🧠 {cn}思考分析", "tool_end", subagent=subagent_stack[-1])
                 elif kind == "on_chat_model_stream":
+                    # TTFT 测量：第一个 chunk 到达时记下首 token 延迟
+                    run_id = event.get("run_id", "?")
+                    inflight = chat_calls_inflight.get(run_id)
+                    if inflight and inflight.get("ttft_ms") is None and inflight.get("t_start"):
+                        inflight["ttft_ms"] = int((time.perf_counter() - inflight["t_start"]) * 1000)
+
                     # 子 Agent 内部的 LLM token 不推给用户——子 Agent 的输出是
                     # 给主 Agent 的 ToolMessage，会被主 Agent 消化后再以最终
                     # markdown token 流的形式产出。如果在这里把子 Agent 的 token

@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from agent import auto_approve
+from agent import auto_approve, conversation_events, conversation_meta, conversation_metrics
 from agent.config import load_config
 from agent.core import (
     close_checkpointer,
@@ -21,6 +21,10 @@ from api import artifacts, chat, skills
 cfg = load_config()
 init_logging(cfg.persistence.data_dir)
 auto_approve.init(cfg.persistence.data_dir)
+# 历史会话元数据 + 思考事件流持久化（与 checkpointer 共用 data/checkpoints.db）
+conversation_meta.init(cfg.persistence.data_dir)
+conversation_events.init(cfg.persistence.data_dir)
+conversation_metrics.init(cfg.persistence.data_dir)
 
 
 @asynccontextmanager

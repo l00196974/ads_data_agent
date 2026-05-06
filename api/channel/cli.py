@@ -20,6 +20,16 @@ class CLIChannel(BaseChannel):
         emoji = "📦" if action == "created" else "🔄"
         print(f"\n{emoji} Artifact {action}: {artifact_id}")
 
+    async def send_metrics(self, metrics: dict) -> None:
+        # CLI 简洁一行，避免淹没正常输出
+        in_t = metrics.get("input_tokens", "-")
+        out_t = metrics.get("output_tokens", "-")
+        tps = metrics.get("tps")
+        tps_s = f"{tps:.1f} t/s" if isinstance(tps, (int, float)) else "-"
+        sub = metrics.get("subagent")
+        prefix = f"[{sub}] " if sub else ""
+        print(f"\n  📊 {prefix}in={in_t} out={out_t} {tps_s}")
+
     async def wait_for_confirm(
         self,
         message: str,
