@@ -74,6 +74,11 @@ class WebSSEChannel(BaseChannel):
         data = json.dumps(payload, ensure_ascii=False)
         await self._queue.put(f"event: artifact_updated\ndata: {data}\n\n")
 
+    async def send_reasoning(self, content: str) -> None:
+        """推 reasoning_finalize SSE event。前端把当前流式气泡降级为思考分组项。"""
+        data = json.dumps({"content": content or ""}, ensure_ascii=False)
+        await self._queue.put(f"event: reasoning_finalize\ndata: {data}\n\n")
+
     async def send_metrics(self, metrics: dict) -> None:
         """每次 LLM 调用结束推一条 metrics 到前端 + 落库。
 

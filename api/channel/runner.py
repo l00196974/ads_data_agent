@@ -184,6 +184,8 @@ def _breakdown_input_tokens(messages, model: str | None) -> dict | None:
 _FRAMEWORK_META_TOOLS = frozenset({
     "write_todos", "read_todos",     # TodoListMiddleware：agent 自己维护 TODO 状态
     "read_file", "ls",               # FilesystemMiddleware 只读类：read/list 噪音多无价值
+    "glob", "grep",                  # FilesystemMiddleware 检索类：LLM 在和 ToolOutputTruncation
+                                     # 卸盘文件搏斗时调用（找 call_xxx.json），用户看到困惑
 })
 
 
@@ -506,6 +508,21 @@ class AgentRunner:
                     )
                     # 推 metrics 给 channel —— WebSSE 既推 SSE 也落库；CLI 打印一行
                     await channel.send_metrics(metrics_payload)
+
+                    # **reasoning_finalize**：如果这次 LLM 调用产出了 tool_calls，说明它的
+                    # content 是中间 reasoning（"我先找文件位置"、"切小 page-size 重试"等），
+                    # 不该留在主气泡里。流式期间已经把 token 推到了 channel.send_token，
+                    # 这里通知前端把当前流式气泡降级为思考分组里的一条，避免污染最终回复。
+                    # 子 Agent 内部 token 本来就没推（line on_chat_model_stream），不需要降级。
+                    if not subagent_stack and tool_calls:
+                        c = getattr(output, "content", None) if output is not None else None
+                        if c is None and isinstance(output, dict):
+                            c = output.get("content")
+                        if isinstance(c, list):
+                            # 多模态 content：取 text 部分拼起来
+                            c = "".join(p.get("text", "") if isinstance(p, dict) else str(p) for p in c)
+                        await channel.send_reasoning(c if isinstance(c, str) else "")
+
                     # 子 Agent 内部 LLM 调用结束：关闭对应的"思考分析"step
                     if subagent_stack:
                         cn = _SUBAGENT_CN_LABELS.get(subagent_stack[-1], subagent_stack[-1])

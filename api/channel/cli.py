@@ -20,6 +20,12 @@ class CLIChannel(BaseChannel):
         emoji = "📦" if action == "created" else "🔄"
         print(f"\n{emoji} Artifact {action}: {artifact_id}")
 
+    async def send_reasoning(self, content: str) -> None:
+        # CLI 用前缀提示这段是中间 reasoning，不是最终回复
+        snippet = (content or '').strip().replace('\n', ' ')
+        if snippet:
+            print(f"\n  💭 [reasoning] {snippet[:120]}{'...' if len(snippet) > 120 else ''}")
+
     async def send_metrics(self, metrics: dict) -> None:
         # CLI 简洁一行，避免淹没正常输出
         in_t = metrics.get("input_tokens", "-")

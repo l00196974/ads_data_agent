@@ -67,6 +67,17 @@ class BaseChannel(ABC):
         Channel 自行决定怎么呈现：WebSSE 推 SSE event；CLI 打印简短通知。
         """
 
+    async def send_reasoning(self, content: str) -> None:
+        """LLM 这次调用是「中间 reasoning」（接着 tool_calls），把已经流到前端的
+        token 内容降级——主气泡里**不该**有这段（它是思考过程，不是最终回复）。
+
+        前端约定：收到 reasoning_finalize 时把"当前流式气泡"的 content 取出，
+        删掉气泡本身，把内容摘要追加到当前思考分组的 entries 里（"💭 ..."）。
+        这样主气泡只保留 tool_calls 为空的最终回复 LLM 调用产出的文字。
+
+        默认实现 = no-op（CLI / 测试 mock 可不实现）。
+        """
+
     async def send_metrics(self, metrics: dict) -> None:
         """LLM 调用 metrics（每次 on_chat_model_end 推一条）。
 

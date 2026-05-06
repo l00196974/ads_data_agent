@@ -454,6 +454,22 @@ async function sendOrAppend() {
       task_update: (_data) => {
         // append-only 模式下不需要状态推断，忽略
       },
+      reasoning_finalize: (data) => {
+        // 后端通知：刚才那次 LLM 调用的 content 是中间 reasoning（接着发起了
+        // tool_calls），不是最终回复——把流式气泡降级到思考分组里去。
+        // streaming 气泡通常在 thinking 分组之**后**（thinking 是 sendOrAppend
+        // 入口创建的，token 流晚于 step），所以 splice streaming 不影响 thinking
+        // 索引。如果没有 streaming 气泡（content 全空 / 已被收尾），不做事。
+        if (currentStreamingIdx.value === null) return
+        const reasoning = (data.content || messages.value[currentStreamingIdx.value]?.content || '').trim()
+        // 删流式气泡
+        messages.value.splice(currentStreamingIdx.value, 1)
+        currentStreamingIdx.value = null
+        if (!reasoning) return
+        // 把 reasoning 摘要放进思考分组（记不住完整文本意义不大，前 200 字够 review）
+        const summary = reasoning.length > 200 ? reasoning.slice(0, 200) + '…' : reasoning
+        appendLog({ label: `💭 ${summary}`, kind: 'done', subagent: null })
+      },
       token: (data) => {
         // 流式 token 累加到当前 assistant 气泡。
         // 故意**不**关闭 thinking 分组——主 Agent 经常在 task 工具调用前先输出

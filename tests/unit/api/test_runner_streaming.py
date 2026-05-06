@@ -226,6 +226,65 @@ def test_metrics_handles_missing_usage_gracefully():
     assert m["context_used_pct"] is None  # 缺 input_tokens 时不算
 
 
+def test_reasoning_finalize_emitted_when_tool_calls_present():
+    """LLM 调用产出 tool_calls 时（中间 reasoning），runner 应推 reasoning_finalize
+    SSE event，前端据此把已流到主气泡的 token 降级为思考分组。"""
+    output_mock = MagicMock()
+    output_mock.usage_metadata = {"input_tokens": 100, "output_tokens": 30, "total_tokens": 130}
+    output_mock.tool_calls = [{"name": "query_metrics", "args": {"x": 1}}]
+    output_mock.content = "我先查一下最近一周的数据"
+    output_mock.response_metadata = {}
+    emitted = _run_with_events([
+        {"event": "on_chat_model_start", "data": {"input": {}}, "run_id": "r1", "metadata": {}},
+        {"event": "on_chat_model_end", "data": {"output": output_mock}, "run_id": "r1", "metadata": {}},
+    ])
+    rf = [e for e in emitted if e["event"] == "reasoning_finalize"]
+    assert len(rf) == 1
+    assert rf[0]["data"]["content"] == "我先查一下最近一周的数据"
+
+
+def test_reasoning_finalize_NOT_emitted_when_no_tool_calls():
+    """tool_calls 为空 = 最终回复，content 是给用户的——不能降级到思考分组。"""
+    output_mock = MagicMock()
+    output_mock.usage_metadata = {"input_tokens": 100, "output_tokens": 30, "total_tokens": 130}
+    output_mock.tool_calls = []
+    output_mock.content = "最终结论：本周流水 1.2 亿"
+    output_mock.response_metadata = {}
+    emitted = _run_with_events([
+        {"event": "on_chat_model_start", "data": {"input": {}}, "run_id": "r2", "metadata": {}},
+        {"event": "on_chat_model_end", "data": {"output": output_mock}, "run_id": "r2", "metadata": {}},
+    ])
+    rf = [e for e in emitted if e["event"] == "reasoning_finalize"]
+    assert len(rf) == 0
+
+
+def test_reasoning_finalize_NOT_emitted_inside_subagent():
+    """子 Agent 内部的 token 本来就没推到主气泡（runner stream 分支跳过），
+    所以也不需要 reasoning_finalize 让前端降级——发了反而误删主 Agent 的气泡。"""
+    output_mock = MagicMock()
+    output_mock.usage_metadata = {"input_tokens": 100, "output_tokens": 30, "total_tokens": 130}
+    output_mock.tool_calls = [{"name": "run_command", "args": {"cmd": "x"}}]
+    output_mock.content = "子 Agent reasoning 内容"
+    output_mock.response_metadata = {}
+    emitted = _run_with_events([
+        # task 工具压栈
+        {"event": "on_tool_start", "name": "task", "data": {"input": {"subagent_type": "data-analyst"}}},
+        {"event": "on_chat_model_start", "data": {"input": {}}, "run_id": "r3", "metadata": {}},
+        {"event": "on_chat_model_end", "data": {"output": output_mock}, "run_id": "r3", "metadata": {}},
+        {"event": "on_tool_end", "name": "task", "data": {}},
+    ])
+    rf = [e for e in emitted if e["event"] == "reasoning_finalize"]
+    assert len(rf) == 0
+
+
+def test_meta_filter_includes_glob_grep():
+    """glob / grep 是 FilesystemMiddleware 内部工具——LLM 在和 ToolOutputTruncation
+    卸盘文件搏斗时调用，对用户没业务含义，必须从 step 流过滤掉。"""
+    from api.channel.runner import _is_meta_tool
+    assert _is_meta_tool("glob")
+    assert _is_meta_tool("grep")
+
+
 def test_breakdown_buckets_messages_by_role():
     """tiktoken 估算把 input messages 按 system / tool_results / history / current
     四类分桶。锁住的是契约：每类至少能识别出来，最后一条 HumanMessage 算 current。"""
