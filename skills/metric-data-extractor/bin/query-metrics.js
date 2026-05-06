@@ -20,6 +20,11 @@ function loadConfig() {
   }
 }
 
+// 工具自动截断阈值——保护 LLM 上下文不被一次返回的大数据集爆掉。
+// 上层 backend 还有 ToolOutputTruncationMiddleware（默认 5000 字节）做最终兜底，
+// 但那是粗暴卸盘；这里在数据结构层级先截，能把"被截断"的信号语义化传给 LLM。
+const MAX_ROWS_RETURNED = 1000;
+
 function toEchartsDataset(payload) {
   const rows = Array.isArray(payload.data) ? payload.data : [];
   if (rows.length === 0) {
@@ -27,7 +32,13 @@ function toEchartsDataset(payload) {
   }
   const dimensions = Object.keys(rows[0]);
   const source = [dimensions, ...rows.map(row => dimensions.map(d => row[d]))];
-  return { dataset: { dimensions, source }, total: payload.total || rows.length };
+  const out = { dataset: { dimensions, source }, total: payload.total || rows.length };
+  // 透传截断信号：让 LLM 知道"还有更多数据没拿到"，避免据此给出全量结论
+  if (payload.truncated) {
+    out.truncated = true;
+    out.total_before_truncation = payload.total_before_truncation;
+  }
+  return out;
 }
 
 // 运算符映射表
@@ -187,15 +198,28 @@ async function trySemanticFix(errors, originalFilters) {
   const searcher = new SemanticSearch();
   await searcher.initialize();
 
+  // error.dimension 是 mapper 反查后的英文 code（如 'promotionTarget'），
+  // 但 originalFilters 的 key 可能是用户传的中文 alias（如 '推广对象'）。
+  // 用 mapper 给每个原 key 解析一次，建反向映射 code → originalKey。
+  const mapper = new EntityMapper();
+  const codeToOriginalKey = {};
+  for (const key of Object.keys(fixedFilters)) {
+    const mapped = mapper.mapDimension(key);
+    if (!mapped.error) codeToOriginalKey[mapped.value] = key;
+  }
+
   for (const error of valueErrors) {
     const candidates = await searcher.search(error.dimension, error.value, 1);
     if (candidates.length === 0 || candidates[0].similarity < 0.5) {
       return null;
     }
 
-    const originalKey = Object.keys(fixedFilters).find((key) => key === error.dimension || key === error.dimension || key === '推广对象' || key === '渠道' || key === '落地页' || key === '设备');
-    if (originalKey) {
-      fixedFilters[originalKey] = candidates[0].value_code;
+    const originalKey = codeToOriginalKey[error.dimension];
+    if (originalKey && fixedFilters[originalKey] && Array.isArray(fixedFilters[originalKey].values)) {
+      // 保留原 oper（GT/LIKE/IN 等），只把语义搜索修正后的 value 替换原值。
+      // 注意 SemanticSearch.search 返回的字段是 `value`，不是 `value_code`
+      // —— SKILL.md 第 471 行明确说「使用 value 字段而不是 value_desc」。
+      fixedFilters[originalKey].values = [candidates[0].value];
     }
   }
 
@@ -281,8 +305,8 @@ async function main() {
     console.error('=== RESPONSE JSON ===');
     console.error(JSON.stringify(payload, null, 2));
 
-    if (Array.isArray(payload.data) && payload.data.length > 1000) {
-      payload.data = payload.data.slice(0, 1000);
+    if (Array.isArray(payload.data) && payload.data.length > MAX_ROWS_RETURNED) {
+      payload.data = payload.data.slice(0, MAX_ROWS_RETURNED);
       payload.truncated = true;
       payload.total_before_truncation = response.data.data.total;
     }
