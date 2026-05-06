@@ -66,34 +66,41 @@ def test_oversized_tool_message_truncated_and_persisted(tmp_data_dir):
     assert isinstance(truncated, ToolMessage)
     assert "truncated by ToolOutputTruncationMiddleware" in truncated.content
     assert "original 1000 bytes" in truncated.content
-    assert "saved to tool_outputs/call_42.json" in truncated.content
+    # 路径已改为按 conv 分组：tool_outputs/{conv_id}/{tool_call_id}.json
+    assert "saved to tool_outputs/conv1/call_42.json" in truncated.content
     assert len(truncated.content) < 600, "summary should be much shorter than original"
 
-    # Verify the full original content was written to disk under the user's dir
-    out_path = Path(tmp_data_dir) / "alice" / "tool_outputs" / "call_42.json"
+    # Verify the full original content was written to disk under user/conv dir
+    out_path = Path(tmp_data_dir) / "alice" / "tool_outputs" / "conv1" / "call_42.json"
     assert out_path.exists()
     assert out_path.read_text(encoding="utf-8") == big
 
 
-def test_user_id_extracted_from_thread_id(tmp_data_dir):
-    """thread_id formats: bare 'user_id' or 'user_id_conversation_id' both
-    must yield the right per-user directory."""
+def test_user_and_conv_extracted_from_thread_id(tmp_data_dir):
+    """thread_id 格式：'user_id' 或 'user_id_conv_id'，两种都要拆出
+    user + conv（无 conv 时兜底为 'default'）。"""
     mw = ToolOutputTruncationMiddleware(max_bytes=10, data_dir=tmp_data_dir)
     big = "y" * 100
 
     cases = [
-        ("alice", "alice"),
-        ("alice_abc123def456", "alice"),
-        ("user42_conv01", "user42"),
+        # (thread_id, expected_user, expected_conv)
+        ("alice", "alice", "default"),
+        ("alice_abc123def456", "alice", "abc123def456"),
+        ("user42_conv01", "user42", "conv01"),
     ]
-    for thread_id, expected_user in cases:
+    for thread_id, expected_user, expected_conv in cases:
         state = {"messages": [
             ToolMessage(content=big, tool_call_id=f"call_{thread_id}", name="t")
         ]}
         with _patch_thread_id(thread_id):
             mw.before_model(state, MagicMock())
-        target = Path(tmp_data_dir) / expected_user / "tool_outputs" / f"call_{thread_id}.json"
-        assert target.exists(), f"thread_id={thread_id} should map to user {expected_user}"
+        target = (
+            Path(tmp_data_dir) / expected_user / "tool_outputs"
+            / expected_conv / f"call_{thread_id}.json"
+        )
+        assert target.exists(), (
+            f"thread_id={thread_id} should map to user={expected_user} conv={expected_conv}"
+        )
 
 
 def test_json_string_content_persisted_as_is(tmp_data_dir):
@@ -110,7 +117,7 @@ def test_json_string_content_persisted_as_is(tmp_data_dir):
         result = mw.before_model(state, MagicMock())
     assert result is not None
 
-    out_path = Path(tmp_data_dir) / "bob" / "tool_outputs" / "dict_call.json"
+    out_path = Path(tmp_data_dir) / "bob" / "tool_outputs" / "conv2" / "dict_call.json"
     assert out_path.exists()
     parsed = json.loads(out_path.read_text(encoding="utf-8"))
     assert parsed == payload

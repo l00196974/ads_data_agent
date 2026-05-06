@@ -31,21 +31,28 @@ class ToolOutputTruncationMiddleware(AgentMiddleware):
         self.max_bytes = max_bytes
         self.data_dir = Path(data_dir)
 
-    def _user_id(self) -> str:
+    def _user_and_conv(self) -> tuple[str, str]:
+        """从 thread_id 拆出 (user_id, conv_id)。
+        thread_id 格式 "{user_id}_{conv_id}"；只有 user_id 时 conv 兜底为 'default'。"""
         try:
             cfg = get_config()
             thread_id = cfg.get("configurable", {}).get("thread_id", "unknown")
         except RuntimeError:
             thread_id = "unknown"
-        # thread_id format: "user_id" or "user_id_conv_id" — first segment is user
-        return str(thread_id).split("_", 1)[0] or "unknown"
+        s = str(thread_id)
+        if "_" in s:
+            user, conv = s.split("_", 1)
+            return user or "unknown", conv or "default"
+        return s or "unknown", "default"
 
     def before_model(self, state: AgentState, runtime: Runtime[Any]) -> dict[str, Any] | None:
         messages = state.get("messages", [])
         if not messages:
             return None
 
-        out_dir = self.data_dir / self._user_id() / "tool_outputs"
+        # 路径加 conv 维度：永久删除 conv 时能精确 rmtree 对应子目录，避免跨会话残留
+        user_id, conv_id = self._user_and_conv()
+        out_dir = self.data_dir / user_id / "tool_outputs" / conv_id
 
         modified = False
         new_messages = []
@@ -71,7 +78,10 @@ class ToolOutputTruncationMiddleware(AgentMiddleware):
                 pass
 
             preview = content[:300].rstrip()
-            file_note = f"saved to tool_outputs/{saved_to}" if saved_to else "(disk write failed; data lost)"
+            file_note = (
+                f"saved to tool_outputs/{conv_id}/{saved_to}"
+                if saved_to else "(disk write failed; data lost)"
+            )
             summary = (
                 f"{preview}\n\n"
                 f"…[truncated by ToolOutputTruncationMiddleware; "

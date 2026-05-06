@@ -6,7 +6,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from agent import auto_approve, conversation_events, conversation_meta, conversation_metrics
+from agent import (
+    auto_approve,
+    conversation_events,
+    conversation_meta,
+    conversation_metrics,
+    tool_outputs_cleanup,
+)
 from agent.config import load_config
 from agent.core import (
     close_checkpointer,
@@ -25,6 +31,12 @@ auto_approve.init(cfg.persistence.data_dir)
 conversation_meta.init(cfg.persistence.data_dir)
 conversation_events.init(cfg.persistence.data_dir)
 conversation_metrics.init(cfg.persistence.data_dir)
+# 启动时清理超龄 tool_outputs 卸盘文件（兜底：SummarizationMiddleware 替换后
+# 失联的孤立文件、软删未联动的残留）。0 天 = 关闭，开发场景用
+tool_outputs_cleanup.cleanup_expired(
+    cfg.persistence.data_dir,
+    cfg.agent.long_context.tool_output_ttl_days,
+)
 
 
 @asynccontextmanager

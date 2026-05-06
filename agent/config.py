@@ -33,8 +33,13 @@ class LongContextConfig(BaseModel):
     summarization_keep_messages: int = 10
 
     # 单条业务工具返回值字节数超过此值时，messages 里只保留摘要 + 文件路径，
-    # 完整内容写到 data/{user_id}/tool_outputs/{tool_call_id}.json（暂未实现）。
+    # 完整内容写到 data/{user_id}/tool_outputs/{conv_id}/{tool_call_id}.json。
     tool_output_max_bytes: int = 5000
+
+    # 卸盘文件 TTL（天）。Backend 启动时清理 mtime 超龄的 tool_outputs。
+    # SummarizationMiddleware 把老 messages 替换成 summary string 后，指针消失但文件
+    # 残留——靠 TTL 兜底。0 = 关闭清理（开发期想保留完整原始数据时用）。
+    tool_output_ttl_days: int = 30
 
 
 class SubAgentSpec(BaseModel):

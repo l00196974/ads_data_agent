@@ -1,5 +1,6 @@
 import asyncio
 from datetime import datetime
+from pathlib import Path
 from uuid import uuid4
 
 try:
@@ -421,9 +422,8 @@ async def restore_conversation(user_id: str, conversation_id: str):
 
 @router.delete("/{user_id}/conversations/{conversation_id}/permanent")
 async def delete_conversation_permanent(user_id: str, conversation_id: str):
-    """硬删：双删 meta + 事件 + checkpointer thread。**不可逆**。
-
-    前端必须在调用前弹"无法恢复"确认框，确认后才走这里。
+    """硬删：双删 meta + 事件 + checkpointer thread + tool_outputs 卸盘文件。
+    **不可逆**——前端必须先弹"无法恢复"确认框。
     """
     config = session_mgr.get_config(user_id, conversation_id)
     cp = get_checkpointer()
@@ -437,4 +437,14 @@ async def delete_conversation_permanent(user_id: str, conversation_id: str):
     conversation_events.delete_for_conversation(user_id, conversation_id)
     conversation_metrics.delete_for_conversation(user_id, conversation_id)
     conversation_meta.delete_permanent(user_id, conversation_id)
+    # 清理 ToolOutputTruncationMiddleware 卸盘的大工具返回值文件——
+    # 路径 {data_dir}/{user_id}/tool_outputs/{conv_id}/，整个 conv 子目录 rmtree。
+    # 失败容忍：目录不存在 / 权限错误都不影响主删除流程
+    import shutil
+    tool_outputs_dir = Path(cfg.persistence.data_dir) / user_id / "tool_outputs" / conversation_id
+    if tool_outputs_dir.exists():
+        try:
+            shutil.rmtree(tool_outputs_dir)
+        except OSError:
+            pass
     return {"status": "deleted"}
