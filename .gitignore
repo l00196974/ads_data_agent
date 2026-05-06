@@ -11,6 +11,12 @@ node_modules/
 dist/
 *.egg-info/
 
+# 打包工件：下载缓存（Node + Python portable archives, get-pip.py）+ PyInstaller 中间产物
+# 缓存可重复下载，PyInstaller 中间产物每次 build 重生
+build/cache/
+build/_pyi-build/
+build/_pyi-spec/
+
 # Logs
 *.log
 
@@ -24,6 +30,10 @@ e2e-*.png
 prefs-*.png
 subagent-*.png
 thinking-*.png
+ui-*.png
+bundle-*.png
+chart-inline.png
+scroll-top.png
 
 # Benchmark / one-off probe scripts（临时验证用，不入仓）
 bench_result.jsonl

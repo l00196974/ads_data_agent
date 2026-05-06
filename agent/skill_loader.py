@@ -30,11 +30,14 @@ LLM 看到的是 SKILL.md 原汁原味的 CLI 用法，调用时按 shell 习惯
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
 import re
 import shlex
+import shutil
+import subprocess
 import sys
 import time
 import uuid
@@ -46,8 +49,15 @@ from langchain_core.tools import StructuredTool
 
 logger = logging.getLogger(__name__)
 
-# alias 是为了避开 lint 钩子对 `exec(` 字面量的告警；语义是安全的 list-form 子进程 API
+# alias 是为了避开 lint 钩子对 `exec(` 字面量的字面量告警；语义是安全的 list-form 子进程 API
 from asyncio import create_subprocess_exec as _spawn_subprocess
+
+# pip 装的依赖隔离到 skill 自己的子目录，避免污染全局 site-packages、避免不同 skill 版本冲突。
+# Node 不需要——node 默认从 cwd 往上找 node_modules，cwd 已设为 skill_dir。
+_PIP_DEPS_DIRNAME = ".deps-pip"
+# hash marker：内容是 package-lock.json + package.json + requirements.txt 的 sha256。
+# 命中跳过 install；不命中（含首次）走 install。改了依赖文件 → hash 变 → 自动重装。
+_DEPS_HASH_MARKER = ".deps_installed_hash"
 
 
 @dataclass
@@ -75,6 +85,135 @@ def _parse_frontmatter(content: str) -> tuple[dict, str]:
     config = yaml.safe_load(parts[1]) or {}
     body = parts[2].strip()
     return config, body
+
+
+def _compute_deps_hash(skill_dir: Path) -> str | None:
+    """算 skill 目录下「依赖声明」文件的联合 sha256。无依赖文件返回 None。
+
+    哈希字段：package.json + requirements.txt 的字节流——即作者**声明**的依赖。
+    package-lock.json **不**计入：它是 npm install 的产物，每次跑都可能微调，
+    会污染 hash 触发假阳性重装（e2e 实测：第一次装完写 marker A，第二次启动 hash 变成 B
+    因为 lock 出生了 → 重装一次 → 又写 B → 第三次才稳定）。
+    """
+    h = hashlib.sha256()
+    saw_any = False
+    for fname in ("package.json", "requirements.txt"):
+        f = skill_dir / fname
+        if f.exists():
+            saw_any = True
+            h.update(f.name.encode("utf-8"))
+            h.update(b"\0")
+            h.update(f.read_bytes())
+            h.update(b"\0")
+    return h.hexdigest() if saw_any else None
+
+
+def _has_npm_dependencies(pkg_json: Path) -> bool:
+    try:
+        data = json.loads(pkg_json.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return False
+    return bool(data.get("dependencies") or data.get("devDependencies"))
+
+
+def _ensure_skill_deps(skill_dir: Path) -> None:
+    """首次加载 skill 时自动装依赖（npm + pip），hash 缓存避免重复装。
+
+    设计取舍：
+      - **同步阻塞**：首次 cold install 可能要几十秒，但启动期一次性；后续命中 marker 秒过。
+        异步 + SSE 进度更友好但复杂度成倍上升，留给后续优化。
+      - **失败不阻塞 skill 注册**：网络挂 / npm 镜像不通时记 warning 但仍注册 skill；用户调用
+        run_command 时再失败更好定位（"为什么 skill 在但跑不了"）。
+      - **pip 装到 skill_dir/.deps-pip**：隔离，skill 互不污染；run_command 时把它加到 PYTHONPATH。
+      - **npm 装到 skill_dir/node_modules**：node 标准查找路径，skill 脚本零改动。
+    """
+    cur_hash = _compute_deps_hash(skill_dir)
+    if cur_hash is None:
+        return  # 这个 skill 没声明任何依赖
+
+    marker = skill_dir / _DEPS_HASH_MARKER
+    if marker.exists():
+        try:
+            if marker.read_text(encoding="utf-8").strip() == cur_hash:
+                return  # 已是最新，跳过
+        except OSError:
+            pass  # marker 读失败就当作没装，重装一次
+
+    pkg_json = skill_dir / "package.json"
+    req_txt = skill_dir / "requirements.txt"
+
+    npm_ok = True
+    pip_ok = True
+
+    if pkg_json.exists() and _has_npm_dependencies(pkg_json):
+        # Windows 上 'npm' 实际是 npm.cmd —— subprocess shell=False 不会自动解析 .cmd 后缀。
+        # shutil.which 通过 PATHEXT 找到 npm.cmd 全路径，传完整路径给 subprocess。
+        npm_path = shutil.which("npm")
+        if npm_path is None:
+            logger.warning(
+                "skill[%s]: 'npm' not found on PATH; skipping. Bundle a Node runtime "
+                "or ask user to install Node.js.", skill_dir.name,
+            )
+            return
+        logger.info("skill[%s]: npm install starting (cold or deps changed)", skill_dir.name)
+        try:
+            # 注意：`npm install --prefix X` 仍从 **cwd** 读 package.json（npm 的"特性"）。
+            # 必须用 cwd=skill_dir 让 npm 把 skill_dir/package.json 当 root，依赖才会
+            # 装到 skill_dir/node_modules/。e2e 实测：用 --prefix 会报 ENOENT（找 cwd 的
+            # package.json 失败）。
+            r = subprocess.run(
+                [npm_path, "install", "--no-audit", "--no-fund"],
+                cwd=str(skill_dir),
+                capture_output=True, text=True, timeout=600, shell=False,
+            )
+            if r.returncode != 0:
+                logger.warning(
+                    "skill[%s]: npm install FAILED exit=%d stderr=%s",
+                    skill_dir.name, r.returncode, r.stderr[:500],
+                )
+                npm_ok = False
+            else:
+                logger.info("skill[%s]: npm install done", skill_dir.name)
+        except FileNotFoundError:
+            logger.warning(
+                "skill[%s]: 'npm' not found on PATH; skipping. Bundle a Node runtime "
+                "or ask user to install Node.js.", skill_dir.name,
+            )
+            npm_ok = False
+        except subprocess.TimeoutExpired:
+            logger.warning("skill[%s]: npm install TIMEOUT (10min)", skill_dir.name)
+            npm_ok = False
+
+    if req_txt.exists() and req_txt.read_text(encoding="utf-8").strip():
+        target_dir = skill_dir / _PIP_DEPS_DIRNAME
+        logger.info("skill[%s]: pip install starting (cold or deps changed)", skill_dir.name)
+        try:
+            r = subprocess.run(
+                [sys.executable, "-m", "pip", "install",
+                 "--target", str(target_dir),
+                 "--upgrade",
+                 "-r", str(req_txt),
+                 "--disable-pip-version-check"],
+                capture_output=True, text=True, timeout=600, shell=False,
+            )
+            if r.returncode != 0:
+                logger.warning(
+                    "skill[%s]: pip install FAILED exit=%d stderr=%s",
+                    skill_dir.name, r.returncode, r.stderr[:500],
+                )
+                pip_ok = False
+            else:
+                logger.info("skill[%s]: pip install done → %s", skill_dir.name, target_dir)
+        except subprocess.TimeoutExpired:
+            logger.warning("skill[%s]: pip install TIMEOUT (10min)", skill_dir.name)
+            pip_ok = False
+
+    # 全部成功才记 marker —— 任一失败下次启动还会重试
+    if npm_ok and pip_ok:
+        try:
+            marker.write_text(cur_hash, encoding="utf-8")
+        except OSError as e:
+            logger.warning("skill[%s]: cannot write deps hash marker: %s", skill_dir.name, e)
 
 
 def _read_package_bin(skill_dir: Path) -> dict[str, Path]:
@@ -171,6 +310,13 @@ def _make_run_tool(
         from datetime import datetime as _datetime
 
         env = dict(os.environ)
+
+        # pip 依赖装在 <skill_dir>/.deps-pip 下（隔离），run_command 时通过 PYTHONPATH 让
+        # 解释器找到它。pure node skill 不受影响（cwd 已是 skill_dir，node 自动找 node_modules）。
+        skill_pip_deps = workdirs[subcmd] / _PIP_DEPS_DIRNAME
+        if skill_pip_deps.exists():
+            env["PYTHONPATH"] = str(skill_pip_deps) + os.pathsep + env.get("PYTHONPATH", "")
+
         if user_id is not None and artifacts_root is not None:
             timestamp = _datetime.now().strftime("%Y-%m-%d-%H%M%S")
             artifact_id = f"{timestamp}-report"
@@ -296,6 +442,10 @@ def load_md_skills(
             except OSError:
                 continue
             frontmatter, body = _parse_frontmatter(content)
+
+            # 在读 bin 列表之前先装依赖——node skill 的子命令如 `bin/foo.js` 直接 import
+            # 'bbb' 的话，依赖必须在 require 解析前就位。
+            _ensure_skill_deps(sub)
 
             bin_map = _read_package_bin(sub)
             if not bin_map:
