@@ -10,4 +10,5 @@ python-dotenv
 pyyaml
 pydantic>=2.0
 langchain-openai
+tiktoken>=0.7  # LLM 上下文 breakdown 估算（runner 实时算各部分 tokens 占用）
 

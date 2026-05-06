@@ -71,6 +71,109 @@ def _extract_model_name(metadata: dict, output) -> str | None:
     return None
 
 
+# tiktoken encoder 进程级缓存——按 (model_name) 索引，避免每次 LLM 调用重新加载
+# 同名 encoder（cl100k_base 几兆，加载几十毫秒）。
+_ENCODER_CACHE: dict[str, object] = {}
+
+
+def _get_encoder(model: str | None):
+    """按模型名拿 tiktoken encoder，未识别的模型 fallback 到 cl100k_base 估算。
+
+    各厂商 tokenizer 不完全相同（OpenAI 用 tiktoken；DeepSeek / 通义 / 火山方舟
+    各有自己的），但 token 数量级与 cl100k 偏差通常 <5%——对"占比可视化"够用。
+    精确数字以 LLM 厂商 usage_metadata 上报的 input_tokens 总数为准（metrics.input_tokens）。
+
+    返回 None 时调用方走"无估算"分支（不给 breakdown）。
+    """
+    try:
+        import tiktoken
+    except ImportError:
+        return None
+    key = model or "__default__"
+    if key in _ENCODER_CACHE:
+        return _ENCODER_CACHE[key]
+    enc = None
+    if model:
+        try:
+            enc = tiktoken.encoding_for_model(model)
+        except Exception:
+            pass
+    if enc is None:
+        try:
+            enc = tiktoken.get_encoding("cl100k_base")
+        except Exception:
+            enc = None
+    _ENCODER_CACHE[key] = enc
+    return enc
+
+
+def _count_text(enc, text) -> int:
+    """安全计数：text 可能是 str / list（多模态）/ 其它，统一转 str 兜底。"""
+    if not text:
+        return 0
+    if isinstance(text, list):
+        # 多模态 content：取所有 text 部分拼起来；图像等忽略不计 token
+        text = "".join(p.get("text", "") if isinstance(p, dict) else str(p) for p in text)
+    elif not isinstance(text, str):
+        text = str(text)
+    if not text:
+        return 0
+    try:
+        return len(enc.encode(text))
+    except Exception:
+        # encoder 偶尔遇到特殊符号可能 raise，按字符数粗估（中文约 1 字符 ≈ 1 token）
+        return len(text)
+
+
+def _breakdown_input_tokens(messages, model: str | None) -> dict | None:
+    """把传给 LLM 的 messages 按角色分桶，估算各类 tokens 占用。
+
+    分桶策略（与 langchain message class 对齐）：
+      - system:       SystemMessage —— PLAN_INSTRUCTION + 当前日期 + skill prompt
+      - tool_results: ToolMessage —— 之前轮工具调用的返回值（往往是大头）
+      - history:      除最后一条 HumanMessage 之外的 Human/AIMessage —— 多轮历史对话
+      - current:      列表里**最后一条** HumanMessage —— 当前轮的新输入
+
+    说明：
+      - AIMessage 的 tool_calls（工具调用 JSON）也算 history 一部分（langchain 序列化
+        到 messages 里发给 LLM）。当前简化：只 count content 部分，tool_calls 偏差几十
+        token，对 % 显示无影响。
+      - encoder 用 tiktoken cl100k_base 估算（多数厂商偏差 <5%），完全不一致时退化按
+        字符数粗估。
+
+    返回 None 当 tiktoken 不可用 / messages 空 —— 前端按"无 breakdown"显示。
+    """
+    enc = _get_encoder(model)
+    if enc is None or not messages:
+        return None
+    # langgraph 给 batch（外层 list[list[BaseMessage]]）；通常 batch_size=1
+    if messages and isinstance(messages[0], list):
+        messages = messages[0]
+
+    # 找出"最后一条 HumanMessage"——它代表当前轮的新输入，单独算一桶
+    last_human_idx = -1
+    for i in range(len(messages) - 1, -1, -1):
+        if type(messages[i]).__name__ == "HumanMessage":
+            last_human_idx = i
+            break
+
+    buckets = {"system": 0, "tool_results": 0, "history": 0, "current": 0}
+    for i, m in enumerate(messages):
+        cls = type(m).__name__
+        n = _count_text(enc, getattr(m, "content", ""))
+        if cls == "SystemMessage":
+            buckets["system"] += n
+        elif cls == "ToolMessage":
+            buckets["tool_results"] += n
+        elif cls == "HumanMessage" and i == last_human_idx:
+            buckets["current"] += n
+        else:
+            # HumanMessage（非最后） + AIMessage —— 历史对话
+            buckets["history"] += n
+    buckets["estimated_total"] = sum(buckets.values())
+    return buckets
+
+
 # deepagents 默认 middleware 注入的"自我管理"工具——对最终用户而言不是业务进度，
 # 是 agent 在 langgraph state 上做内部簿记（更新 todo 状态 / 读虚拟文件系统）。
 # 把这些从 step 事件里过滤掉，避免前端步骤列表被噪音淹没。
@@ -319,6 +422,12 @@ class AgentRunner:
                     metadata = event.get("metadata", {}) or {}
                     node = metadata.get("langgraph_node", "?")
                     run_id = event.get("run_id", "?")
+                    # breakdown：把传给 LLM 的 messages 按角色分类估算 tokens（tiktoken），
+                    # end 时合并到 metrics payload —— 让前端能拆出 system / tool_results /
+                    # history / current 各占多少。input_data 是 dict 形如 {"messages": [...]}。
+                    msgs_for_breakdown = input_data.get("messages") if isinstance(input_data, dict) else None
+                    model_name = metadata.get("ls_model_name") or metadata.get("model_name")
+                    breakdown = _breakdown_input_tokens(msgs_for_breakdown, model_name) if msgs_for_breakdown else None
                     # 记录 LLM 调用开始时间，等 on_chat_model_end 时算 duration / TPS；
                     # 第一个 stream chunk 到达时把 ttft_ms 填进来。
                     chat_calls_inflight[run_id] = {
@@ -326,6 +435,7 @@ class AgentRunner:
                         "ttft_ms": None,
                         "call_seq": chat_model_calls,
                         "subagent": subagent_stack[-1] if subagent_stack else None,
+                        "breakdown": breakdown,
                     }
                     logger.info(
                         "on_chat_model_start #%d node=%s msgs_in_context=%d run_id=%s subagent_ctx=%s",
@@ -380,6 +490,10 @@ class AgentRunner:
                         "tps": round(tps, 2) if tps else None,
                         "context_used_pct": round(ctx_pct, 2) if ctx_pct else None,
                         "context_trigger": summarization_trigger or None,
+                        # tiktoken 估算的各部分 tokens 占用——前端进度条分段叠加用。
+                        # 与厂商上报的 input_tokens 总数可能有 <5% 偏差（不同 tokenizer），
+                        # 仅用作"占比可视化"，不参与计费 / 触发判断。
+                        "breakdown": inflight.get("breakdown"),
                     }
                     logger.info(
                         "on_chat_model_end node=%s tool_calls=%d subagent_ctx=%s in=%s out=%s tps=%s ttft=%s ctx=%s%% %s",

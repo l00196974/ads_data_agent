@@ -87,10 +87,18 @@
             ⚡ {{ latestMetrics.tps.toFixed(1) }} t/s
           </span>
           <span v-if="latestMetrics.context_used_pct != null" class="metric-context"
-                :title="`当前轮上下文 ${formatTokens(latestMetrics.input_tokens)} / 阈值 ${formatTokens(latestMetrics.context_trigger)}\n超过 100% 触发自动压缩 (SummarizationMiddleware)`">
+                :title="contextTooltip">
             <span class="ctx-label">🧠 上下文</span>
-            <span class="ctx-bar">
-              <span class="ctx-fill"
+            <span class="ctx-bar" :class="ctxOverallLevelClass(latestMetrics.context_used_pct)">
+              <!-- 4 段堆叠：system / tool_results / history / current。
+                   宽度按"占阈值的 %"算（与外层进度条同基准），加起来 = 当前 ctx_used_pct。
+                   没有 breakdown 时退化为单段（旧行为）。 -->
+              <template v-if="contextSegments">
+                <span v-for="seg in contextSegments" :key="seg.key"
+                      :class="['ctx-seg', `ctx-seg-${seg.key}`]"
+                      :style="{ width: seg.widthPct + '%' }"></span>
+              </template>
+              <span v-else class="ctx-fill"
                     :class="ctxLevelClass(latestMetrics.context_used_pct)"
                     :style="{ width: Math.min(100, latestMetrics.context_used_pct) + '%' }"></span>
             </span>
@@ -255,6 +263,54 @@ function ctxLevelClass(pct) {
   if (pct >= 80) return 'ctx-fill-warning'
   return 'ctx-fill-normal'
 }
+// 整体进度条边框色：跟随当前轮 context_used_pct 等级（与 ctx-fill 颜色策略一致）
+function ctxOverallLevelClass(pct) {
+  if (pct >= 95) return 'ctx-bar-danger'
+  if (pct >= 80) return 'ctx-bar-warning'
+  return ''
+}
+
+// 把 breakdown 各部分换算成进度条的 width% —— 基准是 context_trigger 阈值
+// （与外层 context_used_pct 同基准），4 段宽度加起来 = ctx_used_pct（最多到 100%）。
+const SEGMENT_LABELS = {
+  system: '系统提示',
+  tool_results: '工具结果',
+  history: '历史对话',
+  current: '当前问题',
+}
+const contextSegments = computed(() => {
+  const m = latestMetrics.value
+  if (!m?.breakdown || !m?.context_trigger) return null
+  const trigger = m.context_trigger
+  const order = ['system', 'tool_results', 'history', 'current']
+  return order
+    .map(key => ({
+      key,
+      tokens: m.breakdown[key] || 0,
+      widthPct: ((m.breakdown[key] || 0) * 100 / trigger),
+    }))
+    .filter(s => s.tokens > 0)
+})
+
+const contextTooltip = computed(() => {
+  const m = latestMetrics.value
+  if (!m) return ''
+  const lines = [
+    `当前轮上下文 ${formatTokens(m.input_tokens)} / 阈值 ${formatTokens(m.context_trigger)}（${m.context_used_pct.toFixed(1)}%）`,
+    '超过 100% 触发自动压缩（SummarizationMiddleware）',
+  ]
+  if (m.breakdown) {
+    lines.push('')
+    lines.push('── 各部分占用（tiktoken 估算，与厂商 ±5%）──')
+    for (const key of ['system', 'tool_results', 'history', 'current']) {
+      const t = m.breakdown[key] || 0
+      if (t > 0) {
+        lines.push(`  ${SEGMENT_LABELS[key]}: ${formatTokens(t)} tokens`)
+      }
+    }
+  }
+  return lines.join('\n')
+})
 const cacheTitle = computed(() => {
   const m = latestMetrics.value
   if (!m) return ''
@@ -957,12 +1013,21 @@ function logout() {
   color: #8c8c8c;
 }
 .ctx-bar {
-  display: inline-block;
-  width: 80px;
+  display: inline-flex;     /* flex 让 4 段并排 */
+  width: 100px;             /* 加宽以容纳 4 段堆叠 */
   height: 6px;
   background: rgba(0, 0, 0, 0.06);
   border-radius: 3px;
   overflow: hidden;
+  box-shadow: inset 0 0 0 1px transparent;
+  transition: box-shadow 0.2s ease;
+}
+.ctx-bar-warning {
+  box-shadow: inset 0 0 0 1px #faad14;
+}
+.ctx-bar-danger {
+  box-shadow: inset 0 0 0 1px #ff4d4f;
+  animation: ctx-pulse 1s infinite;
 }
 .ctx-fill {
   display: block;
@@ -970,6 +1035,16 @@ function logout() {
   border-radius: 3px;
   transition: width 0.3s ease;
 }
+/* 4 段叠加：颜色与 tooltip 标签对应。无边框无圆角让相邻段无缝拼接 */
+.ctx-seg {
+  display: block;
+  height: 100%;
+  transition: width 0.3s ease;
+}
+.ctx-seg-system      { background: #4096ff; }  /* 蓝：系统提示 */
+.ctx-seg-tool_results{ background: #fa8c16; }  /* 橙：工具结果（往往最大） */
+.ctx-seg-history     { background: #722ed1; }  /* 紫：历史对话 */
+.ctx-seg-current     { background: #52c41a; }  /* 绿：当前问题 */
 .ctx-fill-normal {
   background: linear-gradient(90deg, #52c41a, #73d13d);
 }

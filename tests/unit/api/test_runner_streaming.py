@@ -226,6 +226,87 @@ def test_metrics_handles_missing_usage_gracefully():
     assert m["context_used_pct"] is None  # 缺 input_tokens 时不算
 
 
+def test_breakdown_buckets_messages_by_role():
+    """tiktoken 估算把 input messages 按 system / tool_results / history / current
+    四类分桶。锁住的是契约：每类至少能识别出来，最后一条 HumanMessage 算 current。"""
+    from api.channel.runner import _breakdown_input_tokens
+    from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
+    msgs = [
+        SystemMessage(content="你是助手" * 100),
+        HumanMessage(content="第一轮问题"),
+        AIMessage(content="第一轮回答"),
+        ToolMessage(content="工具返回值" * 50, tool_call_id="x"),
+        HumanMessage(content="第二轮问题"),  # 当前
+    ]
+    bd = _breakdown_input_tokens([msgs], "gpt-4o")
+    assert bd is not None
+    assert bd["system"] > 0
+    assert bd["tool_results"] > 0
+    assert bd["history"] > 0  # 第一轮 HumanMessage + AIMessage
+    assert bd["current"] > 0  # 最后一条 HumanMessage
+    assert bd["estimated_total"] == bd["system"] + bd["tool_results"] + bd["history"] + bd["current"]
+
+
+def test_breakdown_only_last_human_is_current():
+    """三条 HumanMessage：前两条算 history，只有最后一条算 current。"""
+    from api.channel.runner import _breakdown_input_tokens
+    from langchain_core.messages import HumanMessage
+    msgs = [
+        HumanMessage(content="历史问题1"),
+        HumanMessage(content="历史问题2"),
+        HumanMessage(content="当前的本轮新问题"),
+    ]
+    bd = _breakdown_input_tokens([msgs], None)
+    # current 只算最后一条
+    assert bd["current"] > 0
+    # history 算前两条
+    assert bd["history"] > 0
+    assert bd["system"] == 0
+    assert bd["tool_results"] == 0
+
+
+def test_breakdown_returns_none_for_empty_messages():
+    """空 messages 没东西可估，返回 None 让前端走"无 breakdown" UI 分支。"""
+    from api.channel.runner import _breakdown_input_tokens
+    assert _breakdown_input_tokens([], "gpt-4o") is None
+    assert _breakdown_input_tokens(None, "gpt-4o") is None
+
+
+def test_breakdown_unknown_model_falls_back_to_cl100k():
+    """非 OpenAI 模型（如 minimax-latest）encoding_for_model 会 raise，必须 fallback
+    到 cl100k_base，不能让 breakdown 整个返回 None（这是常见生产场景）。"""
+    from api.channel.runner import _breakdown_input_tokens
+    from langchain_core.messages import SystemMessage
+    msgs = [SystemMessage(content="x" * 50)]
+    bd = _breakdown_input_tokens([msgs], "minimax-latest")
+    assert bd is not None
+    assert bd["system"] > 0
+
+
+def test_metrics_includes_breakdown_field():
+    """on_chat_model_end 推 metrics 时应带 breakdown 字段（前端进度条分段用）。"""
+    from langchain_core.messages import SystemMessage, HumanMessage
+    chunk_mock = MagicMock()
+    chunk_mock.content = "hi"
+    output_mock = MagicMock()
+    output_mock.usage_metadata = {"input_tokens": 200, "output_tokens": 5, "total_tokens": 205}
+    output_mock.tool_calls = []
+    output_mock.response_metadata = {}
+
+    msgs = [SystemMessage(content="sys" * 20), HumanMessage(content="ask")]
+    emitted = _run_with_events([
+        {"event": "on_chat_model_start", "data": {"input": {"messages": [msgs]}},
+         "run_id": "r5", "metadata": {"ls_model_name": "gpt-4o"}},
+        {"event": "on_chat_model_stream", "data": {"chunk": chunk_mock}, "run_id": "r5", "metadata": {}},
+        {"event": "on_chat_model_end", "data": {"output": output_mock},
+         "run_id": "r5", "metadata": {"ls_model_name": "gpt-4o"}},
+    ])
+    metrics = next(e["data"] for e in emitted if e["event"] == "metrics")
+    assert metrics["breakdown"] is not None
+    assert metrics["breakdown"]["system"] > 0
+    assert metrics["breakdown"]["current"] > 0
+
+
 def test_ttft_recorded_on_first_stream_chunk():
     """on_chat_model_stream 的第一个 chunk 应该让 metrics.ttft_ms 被填上（非 None）。"""
     chunk_mock = MagicMock()
