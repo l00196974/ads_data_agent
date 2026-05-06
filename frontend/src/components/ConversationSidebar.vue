@@ -189,8 +189,7 @@ async function deletePermanent(id) {
 .conv-sidebar {
   width: 260px;
   flex-shrink: 0;
-  background: rgba(252, 252, 254, 0.96);
-  backdrop-filter: blur(10px);
+  background: #fafafa;
   border-right: 1px solid rgba(0, 0, 0, 0.08);
   display: flex;
   flex-direction: column;

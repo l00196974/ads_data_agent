@@ -766,7 +766,7 @@ function logout() {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+  background: #ffffff;
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
 }
 
@@ -838,9 +838,9 @@ function logout() {
 
 .step-tracker {
   padding: 12px 20px 16px;
-  background: rgba(255, 251, 230, 0.9);
-  backdrop-filter: blur(10px);
-  border-bottom: 1px solid #ffe58f;
+  background: #ffffff;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  border-left: 3px solid #faad14;
   max-height: 180px;
   overflow-y: auto;
 }
@@ -869,9 +869,9 @@ function logout() {
 /* Progress Container with visual bar */
 .progress-container {
   padding: 12px 20px;
-  background: rgba(240, 245, 255, 0.9);
-  backdrop-filter: blur(10px);
-  border-bottom: 1px solid #adc6ff;
+  background: #ffffff;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  border-left: 3px solid #2f54eb;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -919,8 +919,7 @@ function logout() {
   align-items: center;
   gap: 14px;
   padding: 8px 20px;
-  background: rgba(250, 252, 255, 0.95);
-  backdrop-filter: blur(10px);
+  background: #fafafa;
   border-bottom: 1px solid rgba(0, 0, 0, 0.06);
   font-size: 12px;
   color: #595959;
@@ -1138,11 +1137,7 @@ function logout() {
   border-radius: 16px;
   font-size: 15px;
   line-height: 1.7;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-  transition: transform 0.2s ease;
-}
-.bubble:hover {
-  transform: translateY(-1px);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
 }
 .bubble.user {
   align-self: flex-end;
@@ -1152,26 +1147,31 @@ function logout() {
 }
 .bubble.assistant {
   align-self: flex-start;
-  background: rgba(255, 255, 255, 0.95);
-  backdrop-filter: blur(10px);
+  background: #ffffff;
   color: #1a1a1a;
   border-bottom-left-radius: 4px;
   max-width: 90%;
+  box-shadow: none;
+  border: 1px solid rgba(0, 0, 0, 0.06);
 }
 .bubble.system {
   align-self: flex-start;
-  background: rgba(245, 240, 250, 0.9);
-  backdrop-filter: blur(10px);
+  background: #fafafa;
   color: #595959;
   border-bottom-left-radius: 4px;
   font-size: 13px;
   padding: 8px 14px;
+  box-shadow: none;
+  border: 1px solid rgba(0, 0, 0, 0.06);
 }
 .bubble.chart-bubble {
   width: 500px;
   max-width: 90%;
   min-width: unset;
   padding: 12px;
+  background: #ffffff;
+  box-shadow: none;
+  border: 1px solid rgba(0, 0, 0, 0.08);
 }
 .typing {
   color: #8c8c8c;
@@ -1264,10 +1264,10 @@ function logout() {
 .append-hint {
   margin: 8px 20px;
   padding: 8px 16px;
-  background: rgba(230, 247, 255, 0.9);
-  backdrop-filter: blur(10px);
-  border: 1px solid #91d5ff;
-  border-radius: 8px;
+  background: #ffffff;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-left: 3px solid #1890ff;
+  border-radius: 6px;
   font-size: 13px;
   color: #1890ff;
 }
@@ -1276,10 +1276,8 @@ function logout() {
   display: flex;
   gap: 10px;
   padding: 16px 20px;
-  background: rgba(255, 255, 255, 0.95);
-  backdrop-filter: blur(10px);
+  background: #ffffff;
   border-top: 1px solid rgba(0, 0, 0, 0.08);
-  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.04);
 }
 .input-box {
   flex: 1;
