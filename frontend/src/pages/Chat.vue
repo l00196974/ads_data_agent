@@ -67,24 +67,39 @@
           <span class="progress-text"><span class="progress-dot">●</span> {{ progressText }}</span>
         </div>
 
-        <!-- LLM metrics 实时栏：每次 on_chat_model_end 推一条，覆盖式更新 -->
+        <!-- LLM metrics 实时栏：左半「本轮累计」+ 右半「本次调用」+ 最右上下文进度条 -->
         <div v-if="latestMetrics" class="metrics-bar">
-          <span class="metric-item" :title="metricsTitleSubagent">
-            <template v-if="latestMetrics.subagent">🤖 {{ subagentLabel(latestMetrics.subagent) }}</template>
-            <template v-else>🧑 主 Agent</template>
+          <!-- 本轮累计：所有 LLM 调用的 input/output 求和（含子 Agent）。
+               用户最关心的"这次发问花了多少钱"——一次 chat 请求里 agent 可能跑 5+ 次 LLM。 -->
+          <span class="metric-group" title="本轮 = 一次 user 提问到 agent 完整回答的所有 LLM 调用累加">
+            <span class="metric-group-label">本轮</span>
+            <span class="metric-item">📥 {{ formatTokens(turnTokens.input) }}</span>
+            <span class="metric-item">📤 {{ formatTokens(turnTokens.output) }}</span>
+            <span class="metric-item metric-calls">{{ turnTokens.calls }} 次</span>
           </span>
-          <span v-if="latestMetrics.model" class="metric-item metric-model" :title="`模型：${latestMetrics.model}`">
-            {{ latestMetrics.model }}
-          </span>
-          <span class="metric-item" :title="cacheTitle">
-            📥 {{ formatTokens(latestMetrics.input_tokens) }}
-            <span v-if="latestMetrics.cache_read_tokens" class="metric-cache">(缓存 {{ formatTokens(latestMetrics.cache_read_tokens) }})</span>
-          </span>
-          <span class="metric-item" title="本轮 LLM 输出 tokens">
-            📤 {{ formatTokens(latestMetrics.output_tokens) }}
-          </span>
-          <span v-if="latestMetrics.tps" class="metric-item" :title="`首 token 延迟 ${latestMetrics.ttft_ms || '-'} ms`">
-            ⚡ {{ latestMetrics.tps.toFixed(1) }} t/s
+
+          <span class="metric-divider-vert">|</span>
+
+          <!-- 本次调用：最近一次 on_chat_model_end 推过来的细节 -->
+          <span class="metric-group" :title="metricsTitleSubagent">
+            <span class="metric-group-label">本次</span>
+            <span class="metric-item">
+              <template v-if="latestMetrics.subagent">🤖 {{ subagentLabel(latestMetrics.subagent) }}</template>
+              <template v-else>🧑 主 Agent</template>
+            </span>
+            <span v-if="latestMetrics.model" class="metric-item metric-model" :title="`模型：${latestMetrics.model}`">
+              {{ latestMetrics.model }}
+            </span>
+            <span class="metric-item" :title="cacheTitle">
+              📥 {{ formatTokens(latestMetrics.input_tokens) }}
+              <span v-if="latestMetrics.cache_read_tokens" class="metric-cache">(缓存 {{ formatTokens(latestMetrics.cache_read_tokens) }})</span>
+            </span>
+            <span class="metric-item" title="本次 LLM 调用的输出 tokens">
+              📤 {{ formatTokens(latestMetrics.output_tokens) }}
+            </span>
+            <span v-if="latestMetrics.tps" class="metric-item" :title="`首 token 延迟 ${latestMetrics.ttft_ms || '-'} ms`">
+              ⚡ {{ latestMetrics.tps.toFixed(1) }} t/s
+            </span>
           </span>
           <span v-if="latestMetrics.context_used_pct != null" class="metric-context"
                 :title="contextTooltip">
@@ -240,9 +255,15 @@ const currentStreamingIdx = ref(null)
 const currentThinkingIdx = ref(null)
 const progressText = ref('')
 // 最近一次 LLM 调用的 metrics（覆盖式：每次 on_chat_model_end 后端推一条）。
-// 顶部状态栏读取这个对象，反映"当前这一轮"或"最近一轮"的运行状态。
-// 切换会话 / 新对话时 reset 为 null，避免显示别的会话的脏数据。
+// 顶部状态栏「本次调用」组读取这个对象 —— 含速度 / 上下文进度条（这些是实时观测值，
+// 没法累加）。切换会话 / 新对话时 reset 为 null，避免显示别的会话的脏数据。
 const latestMetrics = ref(null)
+
+// 本轮（一次 user 提问到 agent 完整回答）所有 LLM 调用的 input/output 累加。
+// 后端 call_seq==1 表示新一轮的第一次调用 —— 在这里归零，之后的 metrics 持续累加。
+// 累加 input_tokens 是真实"本轮成本"：每次 LLM 调用都按当次 input 计费，即使内容
+// 大部分重复（prompt cache 命中部分由 cache_read_tokens 单独显示折扣信号）。
+const turnTokens = ref({ input: 0, output: 0, calls: 0 })
 
 const SUBAGENT_CN_LABELS = {
   'data-fetcher': '取数员',
@@ -541,7 +562,16 @@ async function sendOrAppend() {
         progressText.value = data.message
       },
       metrics: (data) => {
-        // 覆盖式更新：每次 LLM 调用结束推一条；用户能实时看到 in/out/TPS/上下文进度
+        // call_seq==1 = 该轮的第一次 LLM 调用 → 累加器归零（容错"本轮"边界）。
+        // 用后端的 turn 计数器而不是前端 sendOrAppend 自己 reset，避免追问 / append
+        // 时机错位导致漏归零或多归零。
+        if (data.call_seq === 1) {
+          turnTokens.value = { input: 0, output: 0, calls: 0 }
+        }
+        if (typeof data.input_tokens === 'number') turnTokens.value.input += data.input_tokens
+        if (typeof data.output_tokens === 'number') turnTokens.value.output += data.output_tokens
+        turnTokens.value.calls += 1
+        // 「本次调用」组用的是覆盖式 latestMetrics（速度 / 上下文进度条）
         latestMetrics.value = data
       },
       interrupt: (data) => {
@@ -612,6 +642,7 @@ async function selectConversation(conv) {
   currentThinkingIdx.value = null
   appendHint.value = false
   latestMetrics.value = null  // 顶部 metrics 栏复位
+  turnTokens.value = { input: 0, output: 0, calls: 0 }
 
   try {
     const resp = await fetch(
@@ -718,7 +749,9 @@ function clearChat() {
   currentThinkingIdx.value = null
   isStreaming.value = false
   appendHint.value = false
-  latestMetrics.value = null  // 顶部 metrics 栏复位——避免显示上一会话的脏数据
+  // metrics 栏复位——避免显示上一会话的脏数据
+  latestMetrics.value = null
+  turnTokens.value = { input: 0, output: 0, calls: 0 }
   // 切换 conversationId 为 null：下次发请求时后端会创建新 thread，旧对话历史不参与
   conversationId.value = null
   localStorage.removeItem('conversation_id')
@@ -988,6 +1021,30 @@ function logout() {
   align-items: center;
   gap: 4px;
   white-space: nowrap;
+}
+.metric-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  white-space: nowrap;
+}
+.metric-group-label {
+  font-size: 10px;
+  color: #8c8c8c;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 600;
+  padding: 1px 6px;
+  background: rgba(0, 0, 0, 0.04);
+  border-radius: 8px;
+}
+.metric-divider-vert {
+  color: rgba(0, 0, 0, 0.15);
+  font-weight: 300;
+  margin: 0 2px;
+}
+.metric-calls {
+  color: #8c8c8c;
 }
 .metric-model {
   background: rgba(199, 0, 11, 0.08);
