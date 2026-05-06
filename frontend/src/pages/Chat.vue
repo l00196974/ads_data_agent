@@ -48,6 +48,10 @@
             <span class="metric-item">📥 {{ formatTokens(turnTokens.input) }}</span>
             <span class="metric-item">📤 {{ formatTokens(turnTokens.output) }}</span>
             <span class="metric-item metric-calls">{{ turnTokens.calls }} 次</span>
+            <span v-if="turnElapsedMs" class="metric-item metric-elapsed"
+                  :title="isStreaming ? '本轮已耗时（跑完后定格）' : '本轮总耗时（用户发问到 agent 完整回答）'">
+              ⏱ {{ formatDuration(turnElapsedMs) }}
+            </span>
           </span>
 
           <span v-if="latestMetrics" class="metric-divider-vert">|</span>
@@ -234,6 +238,35 @@ const turnTokens = ref({ input: 0, output: 0, calls: 0 })
 // 新对话 / 切到没历史的会话时归零。
 const sessionTokens = ref({ input: 0, output: 0, calls: 0 })
 
+// 本轮耗时计时器：sendOrAppend 起点 → done 事件终点。
+// 跑过程中每 200ms 更新一次 turnElapsedMs（视觉上秒数滚动），跑完定格在最终值。
+const turnElapsedMs = ref(0)
+let turnStartMs = null
+let elapsedTimer = null
+function startTurnTimer() {
+  turnStartMs = Date.now()
+  turnElapsedMs.value = 0
+  if (elapsedTimer) clearInterval(elapsedTimer)
+  elapsedTimer = setInterval(() => {
+    if (turnStartMs) turnElapsedMs.value = Date.now() - turnStartMs
+  }, 200)
+}
+function stopTurnTimer() {
+  if (turnStartMs) turnElapsedMs.value = Date.now() - turnStartMs
+  if (elapsedTimer) {
+    clearInterval(elapsedTimer)
+    elapsedTimer = null
+  }
+}
+function formatDuration(ms) {
+  if (!ms) return '-'
+  if (ms < 1000) return `${ms}ms`
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`
+  const min = Math.floor(ms / 60_000)
+  const sec = Math.floor((ms % 60_000) / 1000)
+  return `${min}m${sec}s`
+}
+
 const SUBAGENT_CN_LABELS = {
   'data-fetcher': '取数员',
   'data-analyst': '数据分析师',
@@ -383,6 +416,7 @@ async function sendOrAppend() {
     currentStreamingIdx.value = null
     appendHint.value = true
     setTimeout(() => { appendHint.value = false }, 3000)
+    startTurnTimer()  // 追问 = 新一轮，重新计时
     scrollToBottom()
     await fetch(`/api/chat/${userId}/append`, {
       method: 'POST',
@@ -397,6 +431,7 @@ async function sendOrAppend() {
   currentStreamingIdx.value = null
   currentThinkingIdx.value = null
   isStreaming.value = true
+  startTurnTimer()
 
   // token 到来时关闭思考分组，让下一波工具事件自然新开下一个
   const closeStreaming = () => { currentStreamingIdx.value = null }
@@ -527,6 +562,7 @@ async function sendOrAppend() {
         closeThinking()
         isStreaming.value = false
         progressText.value = ''
+        stopTurnTimer()  // 本轮耗时定格
       },
       error: (data) => {
         closeStreaming()
@@ -538,6 +574,7 @@ async function sendOrAppend() {
         })
         isStreaming.value = false
         progressText.value = ''
+        stopTurnTimer()
       },
     })
 
@@ -570,6 +607,8 @@ async function selectConversation(conv) {
     sseClient?.abort()
     isStreaming.value = false
   }
+  stopTurnTimer()
+  turnElapsedMs.value = 0
   // 清空当前显示
   messages.value = []
   progressText.value = ''
@@ -680,6 +719,7 @@ async function stopStream() {
   sseClient?.abort()
   await fetch(`/api/chat/${userId}/cancel`, { method: 'POST' })
   isStreaming.value = false
+  stopTurnTimer()  // 用户主动停止也定格本轮耗时
 }
 
 function scrollToBottom() {
@@ -701,6 +741,8 @@ function clearChat() {
   latestMetrics.value = null
   turnTokens.value = { input: 0, output: 0, calls: 0 }
   sessionTokens.value = { input: 0, output: 0, calls: 0 }
+  stopTurnTimer()
+  turnElapsedMs.value = 0
   // 切换 conversationId 为 null：下次发请求时后端会创建新 thread，旧对话历史不参与
   conversationId.value = null
   localStorage.removeItem('conversation_id')
@@ -906,6 +948,12 @@ function logout() {
 }
 .metric-calls {
   color: #8c8c8c;
+}
+.metric-elapsed {
+  /* 等宽数字 + 固定最小宽度，秒数滚动时不抖 */
+  font-variant-numeric: tabular-nums;
+  min-width: 48px;
+  color: #595959;
 }
 .metric-model {
   background: rgba(199, 0, 11, 0.08);
