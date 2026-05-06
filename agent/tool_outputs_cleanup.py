@@ -29,11 +29,15 @@ def cleanup_expired(data_dir: str | Path, ttl_days: int) -> dict[str, int]:
     """
     stats = {"files_deleted": 0, "dirs_removed": 0, "errors": 0}
     if ttl_days <= 0:
+        logger.info("tool_outputs cleanup: skipped (ttl_days=%d, 0 means disabled)", ttl_days)
         return stats
 
     data_path = Path(data_dir)
     if not data_path.exists():
+        logger.info("tool_outputs cleanup: skipped (data_dir not found: %s)", data_path)
         return stats
+
+    logger.info("tool_outputs cleanup: scanning %s (ttl=%dd)", data_path, ttl_days)
 
     cutoff = time.time() - ttl_days * 86400
     # 扫每个 user 目录下的 tool_outputs/
