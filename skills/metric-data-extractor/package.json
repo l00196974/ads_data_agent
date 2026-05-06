@@ -1,0 +1,20 @@
+{
+  "name": "@huawei-ads/metric-data-extractor",
+  "version": "1.0.0",
+  "description": "核心指标数据提取 Skill for OpenClaw",
+  "bin": {
+    "query-metrics": "./bin/query-metrics.js",
+    "search-dimension-values": "./bin/search-dimension-values.js",
+    "list-metrics": "./bin/list-metrics.js",
+    "list-dimensions": "./bin/list-dimensions.js"
+  },
+  "scripts": {},
+  "dependencies": {
+    "axios": "^1.7.9",
+    "csv-parse": "^6.1.0",
+    "papaparse": "^5.5.3"
+  },
+  "optionalDependencies": {
+    "@xenova/transformers": "^2.17.2"
+  }
+}
