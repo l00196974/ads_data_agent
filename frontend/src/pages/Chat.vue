@@ -29,10 +29,20 @@
           <span class="progress-text"><span class="progress-dot">●</span> {{ progressText }}</span>
         </div>
 
-        <!-- LLM metrics 实时栏：左半「本轮累计」+ 右半「本次调用」+ 最右上下文进度条 -->
-        <div v-if="latestMetrics" class="metrics-bar">
-          <!-- 本轮累计：所有 LLM 调用的 input/output 求和（含子 Agent）。
-               用户最关心的"这次发问花了多少钱"——一次 chat 请求里 agent 可能跑 5+ 次 LLM。 -->
+        <!-- LLM metrics 实时栏：会话累计 + 本轮 + 实时（模型/速度/上下文）-->
+        <div v-if="latestMetrics || sessionTokens.calls" class="metrics-bar">
+          <!-- 会话累计：跨多次发问，整个 conversation 的总 tokens 消耗。
+               用户最关心"这个会话烧了多少钱"——长对话里这是核心成本指标。 -->
+          <span class="metric-group" title="会话 = 跨多次发问的 conversation 总累计（含历史发问）">
+            <span class="metric-group-label">会话</span>
+            <span class="metric-item">📥 {{ formatTokens(sessionTokens.input) }}</span>
+            <span class="metric-item">📤 {{ formatTokens(sessionTokens.output) }}</span>
+            <span class="metric-item metric-calls">{{ sessionTokens.calls }} 次</span>
+          </span>
+
+          <span class="metric-divider-vert">|</span>
+
+          <!-- 本轮：单次发问到完整回答的所有 LLM 调用累加 -->
           <span class="metric-group" title="本轮 = 一次 user 提问到 agent 完整回答的所有 LLM 调用累加">
             <span class="metric-group-label">本轮</span>
             <span class="metric-item">📥 {{ formatTokens(turnTokens.input) }}</span>
@@ -40,11 +50,11 @@
             <span class="metric-item metric-calls">{{ turnTokens.calls }} 次</span>
           </span>
 
-          <span class="metric-divider-vert">|</span>
+          <span v-if="latestMetrics" class="metric-divider-vert">|</span>
 
-          <!-- 本次调用：最近一次 on_chat_model_end 推过来的细节 -->
-          <span class="metric-group" :title="metricsTitleSubagent">
-            <span class="metric-group-label">本次</span>
+          <!-- 实时：最近一次 LLM 调用的非累加观测值（模型 / 速度）。
+               in/out tokens 已在「会话/本轮」展示，这里不重复 -->
+          <span v-if="latestMetrics" class="metric-group" :title="metricsTitleSubagent">
             <span class="metric-item">
               <template v-if="latestMetrics.subagent">🤖 {{ subagentLabel(latestMetrics.subagent) }}</template>
               <template v-else>🧑 主 Agent</template>
@@ -52,12 +62,8 @@
             <span v-if="latestMetrics.model" class="metric-item metric-model" :title="`模型：${latestMetrics.model}`">
               {{ latestMetrics.model }}
             </span>
-            <span class="metric-item" :title="cacheTitle">
-              📥 {{ formatTokens(latestMetrics.input_tokens) }}
-              <span v-if="latestMetrics.cache_read_tokens" class="metric-cache">(缓存 {{ formatTokens(latestMetrics.cache_read_tokens) }})</span>
-            </span>
-            <span class="metric-item" title="本次 LLM 调用的输出 tokens">
-              📤 {{ formatTokens(latestMetrics.output_tokens) }}
+            <span v-if="latestMetrics.cache_read_tokens" class="metric-item metric-cache" :title="cacheTitle">
+              💾 {{ formatTokens(latestMetrics.cache_read_tokens) }}
             </span>
             <span v-if="latestMetrics.tps" class="metric-item" :title="`首 token 延迟 ${latestMetrics.ttft_ms || '-'} ms`">
               ⚡ {{ latestMetrics.tps.toFixed(1) }} t/s
@@ -222,6 +228,11 @@ const latestMetrics = ref(null)
 // 累加 input_tokens 是真实"本轮成本"：每次 LLM 调用都按当次 input 计费，即使内容
 // 大部分重复（prompt cache 命中部分由 cache_read_tokens 单独显示折扣信号）。
 const turnTokens = ref({ input: 0, output: 0, calls: 0 })
+
+// 整个会话累计——跨多次发问，回答 user "这个会话总共花了多少 tokens"。
+// 进入历史会话时从 backend metrics summary 初始化，metrics 事件持续追加。
+// 新对话 / 切到没历史的会话时归零。
+const sessionTokens = ref({ input: 0, output: 0, calls: 0 })
 
 const SUBAGENT_CN_LABELS = {
   'data-fetcher': '取数员',
@@ -464,16 +475,22 @@ async function sendOrAppend() {
         progressText.value = data.message
       },
       metrics: (data) => {
-        // call_seq==1 = 该轮的第一次 LLM 调用 → 累加器归零（容错"本轮"边界）。
-        // 用后端的 turn 计数器而不是前端 sendOrAppend 自己 reset，避免追问 / append
-        // 时机错位导致漏归零或多归零。
+        // call_seq==1 = 该轮的第一次 LLM 调用 → turnTokens 归零（容错"本轮"边界）。
+        // sessionTokens 不归零——它跨多轮累计；只有 clearChat / 切新会话才清零。
         if (data.call_seq === 1) {
           turnTokens.value = { input: 0, output: 0, calls: 0 }
         }
-        if (typeof data.input_tokens === 'number') turnTokens.value.input += data.input_tokens
-        if (typeof data.output_tokens === 'number') turnTokens.value.output += data.output_tokens
+        if (typeof data.input_tokens === 'number') {
+          turnTokens.value.input += data.input_tokens
+          sessionTokens.value.input += data.input_tokens
+        }
+        if (typeof data.output_tokens === 'number') {
+          turnTokens.value.output += data.output_tokens
+          sessionTokens.value.output += data.output_tokens
+        }
         turnTokens.value.calls += 1
-        // 「本次调用」组用的是覆盖式 latestMetrics（速度 / 上下文进度条）
+        sessionTokens.value.calls += 1
+        // 「实时」组用覆盖式 latestMetrics（模型 / 速度 / 上下文进度条）
         latestMetrics.value = data
       },
       interrupt: (data) => {
@@ -545,6 +562,19 @@ async function selectConversation(conv) {
   appendHint.value = false
   latestMetrics.value = null  // 顶部 metrics 栏复位
   turnTokens.value = { input: 0, output: 0, calls: 0 }
+  // sessionTokens 从历史 metrics summary 初始化——切到老会话能立即看到累计数
+  try {
+    const r = await fetch(`/api/chat/${userId}/conversations/${conv.conversation_id}/metrics`)
+    const data = await r.json()
+    const s = data.summary || {}
+    sessionTokens.value = {
+      input: s.input_tokens || 0,
+      output: s.output_tokens || 0,
+      calls: s.calls || 0,
+    }
+  } catch (_) {
+    sessionTokens.value = { input: 0, output: 0, calls: 0 }
+  }
 
   try {
     const resp = await fetch(
@@ -654,6 +684,7 @@ function clearChat() {
   // metrics 栏复位——避免显示上一会话的脏数据
   latestMetrics.value = null
   turnTokens.value = { input: 0, output: 0, calls: 0 }
+  sessionTokens.value = { input: 0, output: 0, calls: 0 }
   // 切换 conversationId 为 null：下次发请求时后端会创建新 thread，旧对话历史不参与
   conversationId.value = null
   localStorage.removeItem('conversation_id')
