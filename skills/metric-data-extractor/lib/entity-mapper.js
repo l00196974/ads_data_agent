@@ -4,6 +4,18 @@ function normalize(value) {
   return String(value || '').trim().toLowerCase();
 }
 
+// 双向模糊匹配，但加非空 + 长度 guard：candidate 为空字符串 / 单字符时禁止
+// 反向匹配（`target.includes(candidate)`）—— 否则 dimension-values.csv 里
+// value_desc 留空的行会让所有 mapDimensionValue 返回首条空行，"问界M7" 被
+// 错误匹配到"抖音"是真实暴露过的 bug。candidate 至少 2 字才参与反向。
+function fuzzyContains(target, candidate) {
+  const c = normalize(candidate);
+  if (!c) return false;
+  if (c.includes(target)) return true;
+  if (c.length >= 2 && target.includes(c)) return true;
+  return false;
+}
+
 class EntityMapper {
   constructor() {
     this.metricsConfig = readCsv('config/metrics.csv').filter((row) => row.metric_code);
@@ -74,26 +86,40 @@ class EntityMapper {
         valueList = [rawValue];
       }
 
-      const resolvedValues = [];
+      // 仅"精确值匹配"类运算符需要去 dimension-values.csv 校验值合法性。
+      // LIKE/NOT LIKE 是通配符 pattern（`%foo%`）、GT/LT 是数值阈值、
+      // START WITH/END WITH 是前后缀、IS NULL/NOT NULL 不需要值——
+      // 这些走值校验只会全部失败（pattern / 数值不在合法值列表）。
+      // 之前所有运算符无差别校验，导致用户文档里推荐的 `like:%新车%` /
+      // `cost=gt:1000` 等查询全部被 mapper 当 invalid 拒绝。
+      const EXACT_OPERS = new Set(['EQUAL', 'NOT EQUAL', 'IN', 'NOT IN']);
+      const NULL_OPERS = new Set(['IS NULL', 'IS NOT NULL']);
+      const needsValueCheck = EXACT_OPERS.has(inputOper);
+      const isNullOper = NULL_OPERS.has(inputOper);
 
-      for (const value of valueList) {
-        const mappedValue = this.mapDimensionValue(mappedDimension.value, value);
-        if (mappedValue.error) {
-          result.errors.push({
-            field: 'filter_value',
-            dimension: mappedDimension.value,
-            value,
-            message: `维度 "${mappedDimension.value}" 的值 "${value}" 无法识别`,
-            suggestions: this.getSuggestionsForDimensionValue(mappedDimension.value),
-          });
-          continue;
+      let resolvedValues;
+      if (needsValueCheck) {
+        resolvedValues = [];
+        for (const value of valueList) {
+          const mappedValue = this.mapDimensionValue(mappedDimension.value, value);
+          if (mappedValue.error) {
+            result.errors.push({
+              field: 'filter_value',
+              dimension: mappedDimension.value,
+              value,
+              message: `维度 "${mappedDimension.value}" 的值 "${value}" 无法识别`,
+              suggestions: this.getSuggestionsForDimensionValue(mappedDimension.value),
+            });
+            continue;
+          }
+          resolvedValues.push(mappedValue.valueCode);
         }
-        resolvedValues.push(mappedValue.valueCode);
+      } else {
+        // pattern / 数值 / 空值：直接透传给 API，不做合法值校验
+        resolvedValues = valueList.slice();
       }
 
-      // 空值运算符（IS NULL / IS NOT NULL）即使 resolvedValues 空也要保留——
-      // 它的语义就是不需要值。
-      const isNullOper = inputOper === 'IS NULL' || inputOper === 'IS NOT NULL';
+      // 空值运算符即使 valueList 空也要保留——它的语义就是不需要值
       if (resolvedValues.length > 0 || isNullOper) {
         result.filters[mappedDimension.value] = {
           source: mappedDimension.value,
@@ -124,7 +150,7 @@ class EntityMapper {
         return { value: row.metric_code };
       }
 
-      if (normalize(row.metric_name).includes(target) || target.includes(normalize(row.metric_name))) {
+      if (fuzzyContains(target, row.metric_name)) {
         return { value: row.metric_code };
       }
     }
@@ -172,7 +198,7 @@ class EntityMapper {
         return { value: row.dimension_code };
       }
 
-      if (normalize(row.dimension_name).includes(target) || target.includes(normalize(row.dimension_name))) {
+      if (fuzzyContains(target, row.dimension_name)) {
         return { value: row.dimension_code };
       }
     }
@@ -198,7 +224,7 @@ class EntityMapper {
         return { valueCode: row.value, valueName: row.value_desc };
       }
 
-      if (normalize(row.value_desc).includes(target) || target.includes(normalize(row.value_desc))) {
+      if (fuzzyContains(target, row.value_desc)) {
         return { valueCode: row.value, valueName: row.value_desc };
       }
     }

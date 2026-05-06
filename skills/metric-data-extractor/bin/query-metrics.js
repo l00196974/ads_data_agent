@@ -41,16 +41,17 @@ function toEchartsDataset(payload) {
   return out;
 }
 
-// 运算符映射表
+// 运算符映射表。
+// 键必须是**单 token**（无空格）—— parseFilterValue 用 /^(\w+):(.*)$/ 提取 oper，
+// `\w` 不匹配空格，所以 'not like' / 'not in' / 'not null' 这种带空格的 oper
+// 名永远拿不到。统一用紧凑写法：notlike / notin / notnull。
 const OPERATOR_MAP = {
   // 列表运算符
   'in': 'IN',
   'notin': 'NOT IN',
-  'not in': 'NOT IN',
   // 模糊匹配运算符
   'like': 'LIKE',
   'notlike': 'NOT LIKE',
-  'not like': 'NOT LIKE',
   'sw': 'START WITH',
   'ew': 'END WITH',
   'nsw': 'NOT START WITH',
@@ -65,7 +66,6 @@ const OPERATOR_MAP = {
   // 空值运算符
   'null': 'IS NULL',
   'notnull': 'IS NOT NULL',
-  'not null': 'IS NOT NULL',
 };
 
 /**

@@ -1,24 +1,11 @@
 #!/usr/bin/env node
-const fs = require('fs');
-const path = require('path');
-const { parse } = require('csv-parse/sync');
+const { readCsv } = require('../lib/csv-loader');
 
 function main() {
   try {
-    const metricsPath = path.resolve(__dirname, '../config/metrics.csv');
-    let content = fs.readFileSync(metricsPath, 'utf-8');
+    // 复用 lib/csv-loader，保证 BOM / 缺失文件错误处理 与 entity-mapper 等模块一致
+    const records = readCsv('config/metrics.csv');
 
-    // 移除BOM字符（如果存在）
-    if (content.charCodeAt(0) === 0xFEFF) {
-      content = content.slice(1);
-    }
-
-    const records = parse(content, {
-      columns: true,
-      skip_empty_lines: true,
-    });
-
-    // 直接输出表格格式
     console.log(`## 可用指标列表 (共${records.length}个)`);
     console.log('');
     console.log('| 指标代码 | 指标名称 | 分类 | 说明 | 别名 |');
