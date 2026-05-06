@@ -18,6 +18,13 @@ user-invocable: true
    - 事件时间 (`event`) → 用 `day`（虚拟标记，自动转 `timingDimension`）
    - 请求时间 (`request`) → 用 `reqDay`（真实 API 维度，系统自动注入）
 5. **避免无过滤宽查询**：工具自动截断到 1000 条；返回里有 `truncated: true` 说明数据不全，**不能据此给全量结论**。
+6. **mediaName 双值兼容（数据脏，临时绕过）**：现实数据里"华为浏览器"以两个不同标签同时存在 —— `华为浏览器` 和 `HUAWEI Browser`。任何涉及华为浏览器的查询**必须用 IN 同时包两值**，否则会漏数：
+   ```bash
+   ✅ --filters "mediaName=in:华为浏览器,HUAWEI Browser"
+   ❌ --filters "mediaName=华为浏览器"   # 只查到一半
+   ```
+   涉及多媒体对比时把这两值视作同一行汇总（求和后再展示），不要让用户看到"华为浏览器 X 元、HUAWEI Browser Y 元"两行——业务上是同一媒体。
+   （数据团队后续会归一化清洗，届时此约束可移除。）
 
 ## 工作流程
 
