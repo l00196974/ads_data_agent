@@ -19,44 +19,6 @@
         @new-conversation="clearChat"
       />
 
-      <!-- 左侧 Skills 面板 -->
-      <aside class="skill-panel">
-        <div class="panel-title">已注册能力</div>
-        <div class="skill-section">
-          <p class="section-label">系统 Skills</p>
-          <div v-for="s in systemSkills" :key="s.name" class="skill-item">
-            <span class="skill-dot">●</span>{{ s.name }}
-          </div>
-        </div>
-        <div class="skill-section">
-          <p class="section-label">我的 Skills</p>
-          <div
-            v-for="s in userSkills"
-            :key="s.name"
-            class="skill-item user-skill-item"
-            :title="s.description || s.name"
-          >
-            <span class="skill-dot">●</span>
-            <span class="skill-name">{{ s.name }}</span>
-            <button
-              v-if="s.type === 'skill_md'"
-              class="skill-delete"
-              :title="`删除 ${s.name}`"
-              @click="deleteSkill(s.name)"
-            >×</button>
-          </div>
-          <div class="skill-item add-btn" @click="triggerUpload">+ 添加</div>
-          <input
-            ref="fileInputRef"
-            type="file"
-            accept=".zip"
-            style="display: none"
-            @change="onFileChange"
-          />
-          <div v-if="uploadStatus" class="upload-status">{{ uploadStatus }}</div>
-        </div>
-      </aside>
-
       <!-- 右侧对话区 -->
       <div class="chat-area">
         <!-- 进度状态栏 -->
@@ -238,10 +200,6 @@ const interruptMsg = ref('')
 const interruptPreview = ref([])
 const interruptToolName = ref('')
 const interruptRiskLevel = ref('medium')  // 'high' | 'medium'
-const systemSkills = ref([])
-const userSkills = ref([])
-const fileInputRef = ref(null)
-const uploadStatus = ref('')
 const appendHint = ref(false)
 const messagesEl = ref(null)
 const sidebarRef = ref(null)
@@ -399,62 +357,6 @@ function normalizeChartConfig(raw) {
   const xData = raw.x_data || raw.x || []
   const series = (raw.series || []).map(s => ({ name: s.name, type: s.type || type, data: s.data }))
   return { type, title: raw.title || '', xAxis: { data: xData }, series }
-}
-
-async function refreshSkills() {
-  try {
-    const resp = await fetch(`/api/skills/${userId}`)
-    const data = await resp.json()
-    systemSkills.value = data.system || []
-    userSkills.value = data.user || []
-  } catch (_) {}
-}
-
-onMounted(refreshSkills)
-
-function triggerUpload() {
-  fileInputRef.value?.click()
-}
-
-async function onFileChange(e) {
-  const file = e.target.files?.[0]
-  if (!file) return
-  uploadStatus.value = '上传中...'
-  try {
-    const fd = new FormData()
-    fd.append('file', file)
-    const resp = await fetch(`/api/skills/${userId}/upload`, { method: 'POST', body: fd })
-    if (!resp.ok) {
-      const detail = await resp.text().catch(() => '')
-      uploadStatus.value = `失败: ${detail.slice(0, 100)}`
-      return
-    }
-    const data = await resp.json()
-    uploadStatus.value = `已添加: ${data.name}`
-    await refreshSkills()
-  } catch (err) {
-    uploadStatus.value = `网络错误: ${err.message}`
-  } finally {
-    e.target.value = ''
-    setTimeout(() => { uploadStatus.value = '' }, 4000)
-  }
-}
-
-async function deleteSkill(name) {
-  if (!confirm(`确认删除 "${name}"？`)) return
-  try {
-    const resp = await fetch(`/api/skills/${userId}/${encodeURIComponent(name)}`, { method: 'DELETE' })
-    if (!resp.ok) {
-      uploadStatus.value = `删除失败: ${await resp.text()}`
-      return
-    }
-    uploadStatus.value = `已删除: ${name}`
-    await refreshSkills()
-  } catch (err) {
-    uploadStatus.value = `删除错误: ${err.message}`
-  } finally {
-    setTimeout(() => { uploadStatus.value = '' }, 3000)
-  }
 }
 
 async function sendOrAppend() {
@@ -828,94 +730,6 @@ function logout() {
   display: flex;
   flex: 1;
   overflow: hidden;
-}
-
-.skill-panel {
-  width: 240px;
-  background: rgba(255, 255, 255, 0.95);
-  backdrop-filter: blur(10px);
-  border-right: 1px solid rgba(0, 0, 0, 0.08);
-  padding: 20px 16px;
-  overflow-y: auto;
-  flex-shrink: 0;
-  box-shadow: 2px 0 8px rgba(0, 0, 0, 0.04);
-}
-.panel-title {
-  font-weight: 600;
-  font-size: 14px;
-  color: #1a1a1a;
-  margin-bottom: 16px;
-  letter-spacing: 0.5px;
-}
-.skill-section {
-  margin-bottom: 20px;
-}
-.section-label {
-  font-size: 12px;
-  color: #8c8c8c;
-  margin: 0 0 8px;
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-.skill-item {
-  font-size: 13px;
-  color: #595959;
-  padding: 6px 8px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  border-radius: 4px;
-  transition: background 0.15s ease;
-}
-.skill-item:hover {
-  background: rgba(199, 0, 11, 0.05);
-}
-.skill-dot {
-  color: #c7000b;
-  font-size: 10px;
-}
-.add-btn {
-  color: #c7000b;
-  cursor: pointer;
-  font-weight: 500;
-}
-.user-skill-item {
-  position: relative;
-}
-.user-skill-item .skill-name {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.skill-delete {
-  background: transparent;
-  border: none;
-  color: #999;
-  cursor: pointer;
-  font-size: 14px;
-  line-height: 1;
-  padding: 0 4px;
-  border-radius: 4px;
-  margin-left: 4px;
-  display: none;
-}
-.user-skill-item:hover .skill-delete {
-  display: inline-block;
-}
-.skill-delete:hover {
-  background: rgba(199, 0, 11, 0.1);
-  color: #c7000b;
-}
-.upload-status {
-  font-size: 11px;
-  color: #595959;
-  padding: 6px 8px;
-  margin-top: 4px;
-  background: rgba(199, 0, 11, 0.06);
-  border-radius: 4px;
-  word-break: break-all;
 }
 
 .chat-area {
@@ -1424,9 +1238,6 @@ function logout() {
 
 /* Responsive Breakpoints */
 @media (max-width: 768px) {
-  .skill-panel {
-    display: none;
-  }
   .bubble {
     max-width: 92% !important;
   }
@@ -1453,12 +1264,6 @@ function logout() {
   }
   .btn-stop {
     padding: 12px 12px;
-  }
-}
-
-@media (min-width: 769px) and (max-width: 1024px) {
-  .skill-panel {
-    width: 200px;
   }
 }
 

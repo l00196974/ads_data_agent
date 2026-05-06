@@ -1,39 +1,51 @@
 <template>
   <div class="page">
     <header class="topbar">
-      <span class="brand">⚙️ 设置 · 免确认动作</span>
+      <span class="brand">⚙️ 设置</span>
       <span class="user-tag">{{ userId }}</span>
       <button class="btn-back" @click="$router.push('/chat')">← 返回对话</button>
     </header>
 
     <main class="main">
-      <div class="hint">
-        当某个动作（如<code>write_file</code>）触发了 HitL 弹窗，你勾选"以后不再确认"后，
-        该工具名会被加入下面的全局白名单，下次再触发时会**自动放行**不再打扰。
-        <br/>
-        <span class="hint-warn">⚠️ 高危动作（high_risk）即使列在下面也不会被自动放行——硬安全约束。</span>
-      </div>
+      <!-- 已注册能力（系统 + 用户上传）—— 不是常用信息，从对话主界面挪到这里 -->
+      <section class="card">
+        <h2 class="card-title">📚 已注册能力</h2>
+        <p class="card-desc">系统内置 skill 来自部署方；用户 skill 是上传的 SKILL.md 包。同名时用户覆盖系统。</p>
+        <SkillsPanel :user-id="userId" />
+      </section>
 
-      <div v-if="loading" class="state">加载中...</div>
-      <div v-else-if="!tools.length" class="empty">
-        <div class="empty-icon">📋</div>
-        <div>暂无免确认动作</div>
-        <div class="empty-hint">在确认弹窗里勾选"以后不再确认 [工具名]"会出现在这里</div>
-      </div>
-      <ul v-else class="tool-list">
-        <li v-for="t in tools" :key="t" class="tool-item">
-          <code class="tool-name">{{ t }}</code>
-          <button class="btn-revoke" @click="revoke(t)">撤销</button>
-        </li>
-      </ul>
+      <!-- 免确认动作白名单 -->
+      <section class="card">
+        <h2 class="card-title">🔓 免确认动作</h2>
+        <div class="hint">
+          当某个动作（如<code>write_file</code>）触发了 HitL 弹窗，你勾选"以后不再确认"后，
+          该工具名会被加入下面的全局白名单，下次再触发时会**自动放行**不再打扰。
+          <br/>
+          <span class="hint-warn">⚠️ 高危动作（high_risk）即使列在下面也不会被自动放行——硬安全约束。</span>
+        </div>
 
-      <div v-if="lastMsg" class="last-msg">{{ lastMsg }}</div>
+        <div v-if="loading" class="state">加载中...</div>
+        <div v-else-if="!tools.length" class="empty">
+          <div class="empty-icon">📋</div>
+          <div>暂无免确认动作</div>
+          <div class="empty-hint">在确认弹窗里勾选"以后不再确认 [工具名]"会出现在这里</div>
+        </div>
+        <ul v-else class="tool-list">
+          <li v-for="t in tools" :key="t" class="tool-item">
+            <code class="tool-name">{{ t }}</code>
+            <button class="btn-revoke" @click="revoke(t)">撤销</button>
+          </li>
+        </ul>
+
+        <div v-if="lastMsg" class="last-msg">{{ lastMsg }}</div>
+      </section>
     </main>
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted, onActivated } from 'vue'
+import SkillsPanel from '../components/SkillsPanel.vue'
 
 const userId = localStorage.getItem('user_id') || 'anon'
 const tools = ref([])
@@ -107,11 +119,32 @@ onActivated(load)
 
 .main {
   flex: 1;
-  padding: 32px 24px;
+  padding: 24px;
   overflow-y: auto;
-  max-width: 800px;
+  max-width: 900px;
   margin: 0 auto;
   width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+.card {
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid #e9ecef;
+  border-radius: 10px;
+  padding: 20px 24px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.03);
+}
+.card-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #1a1a1a;
+  margin: 0 0 6px;
+}
+.card-desc {
+  font-size: 12px;
+  color: #8c8c8c;
+  margin: 0 0 18px;
 }
 .hint {
   background: #fff;
