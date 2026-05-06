@@ -52,10 +52,10 @@
 
 关键设计决策（详见 [`docs/`](./docs/) 架构文档体系，特别是 `docs/02-features/`）：
 
-- **Skill / Tool / Channel 三层模型** (`docs/02-features/01-skill-tool-channel-model.md`)：framework 默认 tool（含 `send_plan` / `task` 等）+ SKILL.md 业务 skill（聚合到 `run_command`）+ Channel 通信契约——三者职责分离，agent 视角对 channel 切换透明
+- **Skill / Tool / Channel 三层模型** (`docs/02-features/01-skill-tool-channel-model.md`)：deepagents 默认 tool（`task` / `write_file` 等）+ SKILL.md 业务 skill（聚合到 `run_command`）+ Channel 通信契约——三者职责分离，agent 视角对 channel 切换透明
 - **状态控制反转**：runner 监听 `on_tool_start/end` 推送 step 事件，**append-only**（不再有 `task_update`），LLM 不感知任务状态
 - **SubAgent 长上下文主方案** (`docs/02-features/07-subagent-driven-context.md`)：主 Agent 派子 Agent 干脏活，子 Agent 独立 context 跑完只回摘要；Summarization 是兜底
-- **LLM 双协议路由** (`agent/llm.py`)：`base_url` 或 `provider=openai` → `ChatOpenAI`；否则走 deepagents 原生 `init_chat_model`
+- **LLM 客户端**（`agent/llm.py`）：统一 OpenAI 兼容协议（`ChatOpenAI`），`base_url` 切换不同后端（火山方舟 / DeepSeek / 通义 / OpenAI 自家）
 - **持久化**：`AsyncSqliteSaver`（checkpoint）+ `AsyncSqliteStore`（store，默认）+ FastAPI lifespan async init；`thread_id = {user_id}_{conversation_id}`
 
 ---

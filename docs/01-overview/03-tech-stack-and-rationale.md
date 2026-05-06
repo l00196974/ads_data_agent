@@ -9,7 +9,7 @@
 | 后端语言 | Python | ≥ 3.11（实测 3.13） |
 | 后端框架 | FastAPI | latest |
 | Agent 编排 | langgraph + deepagents | langgraph 1.1.x / deepagents latest |
-| LLM 客户端 | langchain（双协议路由） | 通过 langchain-openai / langchain-anthropic 等 |
+| LLM 客户端 | langchain-openai（统一 OpenAI 兼容协议） | base_url 切换不同后端 |
 | 持久化 | AsyncSqliteSaver / AsyncSqliteStore | langgraph-checkpoint-sqlite |
 | 前端语言 | JavaScript（无 TS） | — |
 | 前端框架 | Vue 3 + Vite | latest |
@@ -63,14 +63,16 @@
 - 自研：Time to first agent 从 1 周变 1-2 月，且要自己维护 SubAgent / Summarization 等
 - 用 LangGraph Platform：托管成本高、私有化困难
 
-### 2.3 LLM 双协议路由
+### 2.3 LLM 客户端：langchain-openai 单协议
 
-**为什么有两条路径**：
+**为什么只走 OpenAI 兼容协议**：
 
-- 国内厂商（火山方舟 / DeepSeek / 通义）大都暴露 OpenAI 兼容 endpoint —— ChatOpenAI 路径覆盖
-- Anthropic / Google 各有自己协议 —— langchain init_chat_model 路径覆盖
+- 国内厂商（火山方舟 / DeepSeek / 通义）大都暴露 OpenAI 兼容 endpoint，`base_url` 一切就行
+- 业务上当前不需要原生 Anthropic / Google Gemini——多协议是过度设计，删掉简化心智
+- 实现：`agent/llm.py` 一个 `_build_model()` 函数 + 一种 client（`ChatOpenAI`），`base_url` 切后端
+- 历史曾支持 anthropic 直连 + google `init_chat_model` 路径（双协议路由），已删——`provider` 字段保留兼容旧 config，但不再影响逻辑分支
 
-详见 [02-features/09-llm-dual-protocol-routing.md](../02-features/09-llm-dual-protocol-routing.md)。
+未来真要原生 Anthropic / Google Gemini 时再加分支即可（10 行代码）。
 
 ### 2.4 持久化：AsyncSqliteSaver / AsyncSqliteStore
 

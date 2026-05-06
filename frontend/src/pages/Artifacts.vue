@@ -3,6 +3,7 @@
     <header class="topbar">
       <span class="brand">📦 我的工作区</span>
       <span class="user-tag">{{ userId }}</span>
+      <button class="btn-back" @click="$router.push('/preferences')">⚙️ 设置</button>
       <button class="btn-back" @click="$router.push('/chat')">← 返回对话</button>
     </header>
 

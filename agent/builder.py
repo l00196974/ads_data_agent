@@ -42,7 +42,7 @@ def _validate_interrupt_on(interrupt_on: list, project_tools: list) -> None:
 
     参数:
         interrupt_on: 来自 config.yaml::agent.interrupt_on 的工具名列表
-        project_tools: 项目自己 + 默认工具组成的列表（含 run_command / send_plan 等）
+        project_tools: 项目自己 + 默认工具组成的列表（当前主要是 SKILL.md 加载出的 run_command）
     """
     if not interrupt_on:
         return
@@ -70,24 +70,37 @@ def build_agent(
     user_id: str,
     system_prompt: str,
     skills: list,
-    interrupt_on: list,
+    interrupt_on,
     cfg: AppConfig = None,
     extra_tools: list = None,
 ):
+    """
+    interrupt_on: 接受 InterruptConfig（推荐）或 list[str]（向后兼容）。
+        list 形式自动归到 medium_risk——和旧语义"敏感但默认可放行"一致。
+    """
     if cfg is None:
         cfg = load_config()
 
     if extra_tools:
         skills = skills + extra_tools
 
+    # 兼容 list 形式（旧 caller / 测试）→ 归到 medium_risk
+    from agent.config import InterruptConfig
+    if isinstance(interrupt_on, list):
+        interrupt_on = InterruptConfig(high_risk=[], medium_risk=interrupt_on)
+    intercepted = interrupt_on.all_intercepted()
+
     # 启动校验：interrupt_on 配置错会让敏感操作静默执行（A3 known issue）。
     # 在 create_deep_agent 之前 warn，让运维及早发现配置错误。
-    _validate_interrupt_on(interrupt_on, skills)
+    _validate_interrupt_on(intercepted, skills)
 
     # _build_model 现在统一返回 BaseChatModel 实例（含 cfg.llm.api_key），
     # 无需再判断 isinstance / 调 resolve_model。
     model = _build_model(cfg)
-    interrupt_tools = {tool_name: True for tool_name in interrupt_on}
+    # deepagents HumanInTheLoopMiddleware 期望 dict[tool_name, bool|InterruptOnConfig]。
+    # 这里 high/medium 对 deepagents 都是"拦截"——风险分级是 runner 层做的（决定是否
+    # 强制弹窗 / 是否查白名单），deepagents 不区分。
+    interrupt_tools = {name: True for name in intercepted}
 
     # 业务工具大返回值截断：deepagents 默认只截 write_file/edit_file 的 args，
     # 不管 ToolMessage.content。我们补一个 middleware 把超阈值的工具输出写到磁盘。

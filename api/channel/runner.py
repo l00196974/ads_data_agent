@@ -1,4 +1,6 @@
 import asyncio
+import json
+import logging
 import os
 from datetime import datetime
 
@@ -7,17 +9,52 @@ from langgraph.errors import GraphInterrupt
 from langgraph.types import Command
 
 from .base import BaseChannel
-from .default_tools import make_default_tools
+from agent import auto_approve
 from agent.config import load_config
 from agent.skill_loader import extract_artifact_ids_from_output
 from agent.user_space import UserSpace
 
 
+logger = logging.getLogger(__name__)
+
+
+def _safe_json(obj, max_chars: int = 1500) -> str:
+    """工具 input/output 进日志时的紧凑序列化，超长截断。"""
+    try:
+        s = json.dumps(obj, ensure_ascii=False, default=str)
+    except Exception:
+        s = repr(obj)
+    return s if len(s) <= max_chars else s[:max_chars] + f"...<+{len(s)-max_chars}>"
+
+
+# deepagents 默认 middleware 注入的"自我管理"工具——对最终用户而言不是业务进度，
+# 是 agent 在 langgraph state 上做内部簿记（更新 todo 状态 / 读虚拟文件系统）。
+# 把这些从 step 事件里过滤掉，避免前端步骤列表被噪音淹没。
+#
+# 注意：**write_file / edit_file 故意不在过滤名单**——它们在用户工作区写文件，是
+# 用户真关心的"agent 在我空间里做了什么"业务事件，必须展示。同时它们在 config.yaml
+# 默认被列为 medium_risk，会触发 HitL 弹窗确认。
+_FRAMEWORK_META_TOOLS = frozenset({
+    "write_todos", "read_todos",     # TodoListMiddleware：agent 自己维护 TODO 状态
+    "read_file", "ls",               # FilesystemMiddleware 只读类：read/list 噪音多无价值
+})
+
+
 def _is_meta_tool(name: str) -> bool:
-    """Default framework tools (send_plan / send_to_user / ...) — they
-    represent display/output actions, not business work, so they don't
-    produce step events."""
-    return name.startswith("send_")
+    """识别 deepagents 默认 middleware 注入的状态管理工具——对用户没业务含义，
+    不进 step 事件流。新增此类工具时把名字加进 `_FRAMEWORK_META_TOOLS`。
+    """
+    return name in _FRAMEWORK_META_TOOLS
+
+
+# 子 Agent 技术 name → 中文角色名（前端步骤展示用）。新增子 Agent 时在 config.yaml
+# 加，同时这里加映射。映射不到时直接显示技术 name（不致命，只是不太友好）。
+_SUBAGENT_CN_LABELS = {
+    "data-fetcher": "取数员",
+    "data-analyst": "数据分析师",
+    "issue-diagnostician": "问题诊断师",
+    "general-purpose": "通用助手",
+}
 
 
 def _format_tool_label(tool_name: str, input_data) -> str:
@@ -28,6 +65,10 @@ def _format_tool_label(tool_name: str, input_data) -> str:
     --start-date 2026-03-27 ...`），用户看到具体在跑什么、传了什么参数，
     不再黑盒。
 
+    `task` 是派工到子 Agent 的工具——直接显示成"派给 XXX（中文角色名）"，
+    不要把整个 task description 露出来（动辄上千字）。子 Agent 内部的工具
+    调用在 SSE 事件里独立带 `subagent` 字段，由前端嵌套展示。
+
     其他业务工具：原名 + 主要参数（用 JSON 紧凑表示，截断到 200 字符）。"""
     if not isinstance(input_data, dict) or not input_data:
         return tool_name
@@ -37,6 +78,11 @@ def _format_tool_label(tool_name: str, input_data) -> str:
         if isinstance(cmd, str) and cmd.strip():
             return cmd.strip()
         return tool_name
+
+    if tool_name == "task":
+        st = input_data.get("subagent_type", "")
+        cn = _SUBAGENT_CN_LABELS.get(st, st or "子 Agent")
+        return f"🤖 派给 {cn}"
 
     # 通用工具：把全部 input 紧凑序列化展出，让 LLM 传的参数透明可见
     try:
@@ -49,11 +95,20 @@ def _format_tool_label(tool_name: str, input_data) -> str:
     return f"{tool_name} {snippet}"
 
 
-async def _resume_safely(agent, approve: bool, config: dict) -> None:
+async def _resume_safely(agent, resume_value, config: dict) -> None:
     """resume 期间收到 cancel 不能直接打断 ainvoke——会让 langgraph 写到一半就停，
     checkpointer 留下半完成 state，下一轮 restart 读到 corrupt 状态。
-    把 ainvoke 包成独立 task + shield，cancel 时也等它跑完再 raise。"""
-    inner = asyncio.create_task(agent.ainvoke(Command(resume=approve), config=config))
+    把 ainvoke 包成独立 task + shield，cancel 时也等它跑完再 raise。
+
+    `resume_value` 直接透传给 `Command(resume=...)`：
+      - langchain HumanInTheLoopMiddleware 抛的 interrupt 期望 HITLResponse 格式：
+          `{"decisions": [{"type": "approve"} or {"type": "reject", "message": ...}, ...]}`
+        decision 数量必须 = interrupt 时的 action_requests 数量（middleware 会校验）。
+      - 历史/简单 interrupt 直接传 bool 也能工作（langgraph 把 resume value 原样
+        返回给 interrupt() 调用点）。
+      _handle_interrupt 现在统一构造 HITLResponse dict 传进来。
+    """
+    inner = asyncio.create_task(agent.ainvoke(Command(resume=resume_value), config=config))
     try:
         await asyncio.shield(inner)
     except asyncio.CancelledError:
@@ -64,6 +119,95 @@ async def _resume_safely(agent, approve: bool, config: dict) -> None:
         raise
 
 
+def _build_hitl_response(approve: bool, num_actions: int, reject_message: str = "") -> dict:
+    """构造 langchain HITLResponse 格式：每个 action 一个 decision。
+
+    我们当前 UX 是"全部一起 approve / reject"——所有待确认的 action 共享一个用户决定。
+    后续如果想做"逐个审批"（一个弹窗里勾每个 action），改这个函数即可，runner 上层
+    不用动。
+
+    `num_actions` 至少为 1——HITL 不会触发 0 actions 的 interrupt。
+    """
+    n = max(1, num_actions)
+    if approve:
+        decisions = [{"type": "approve"} for _ in range(n)]
+    else:
+        d = {"type": "reject"}
+        if reject_message:
+            d["message"] = reject_message
+        decisions = [dict(d) for _ in range(n)]
+    return {"decisions": decisions}
+
+
+def _extract_tool_name_from_interrupt(iv) -> str:
+    """从 langchain HITLRequest payload 拿被拦截工具名。
+
+    标准格式（HumanInTheLoopMiddleware 抛的）:
+        {"action_requests": [{"action": "tool_name", "args": {...}, "description": "..."}], ...}
+    旧/简化格式（项目内自定义可能用过）:
+        {"message": "...", "preview": [...], "tool_name": "..."}
+
+    都尝试一下，拿不到就返回空串（runner 决策时安全降级到"不在白名单 → 弹窗"）。
+    """
+    if not isinstance(iv, dict):
+        return ""
+    # 旧格式直接读
+    if iv.get("tool_name"):
+        return str(iv["tool_name"])
+    # langchain HITLRequest
+    requests = iv.get("action_requests") or []
+    if requests and isinstance(requests, list):
+        first = requests[0]
+        if isinstance(first, dict) and first.get("action"):
+            return str(first["action"])
+    return ""
+
+
+async def _handle_interrupt(
+    iv,
+    channel: BaseChannel,
+    agent,
+    config: dict,
+    interrupt_cfg,
+) -> None:
+    """统一的 interrupt 处理：解 payload → 决策（白名单/弹窗）→ 加白名单 → resume agent。
+
+    决策流程：
+      1. 拿工具名（拿不到就当"未知工具"走弹窗，安全保守）
+      2. 工具是 high_risk → 强制弹窗，**忽略**白名单（即使勾过也再问）
+      3. 工具是 medium_risk + 在 auto_approve 白名单 → 直接 approve，跳过弹窗
+      4. 弹窗 → 用户 approve + 勾"以后不再问" → 写白名单
+    """
+    if not isinstance(iv, dict):
+        iv = {"message": str(iv), "preview": []}
+    tool_name = _extract_tool_name_from_interrupt(iv)
+    risk = interrupt_cfg.classify(tool_name) if tool_name else "medium"
+    message = iv.get("message", "") or iv.get("description", "") or f"即将执行:{tool_name or '未知工具'}"
+    preview = iv.get("preview", [])
+    # action_requests 长度 = LLM 一次输出的并行 medium/high tool_calls 数。
+    # langchain HumanInTheLoopMiddleware 校验 decisions 数 == action_requests 数，
+    # 不一致直接 raise——所以构造 HITLResponse 时必须按这个长度。
+    num_actions = len(iv.get("action_requests") or []) or 1
+
+    # medium_risk + 在白名单 → 自动通过（high_risk 即使在白名单也不跳过——硬约束）
+    if risk == "medium" and auto_approve.contains(tool_name):
+        logger.info("hitl auto-approved tool=%s (in whitelist)", tool_name)
+        await _resume_safely(agent, _build_hitl_response(True, num_actions), config)
+        return
+
+    logger.info("hitl prompting tool=%s risk=%s actions=%d", tool_name, risk, num_actions)
+    approve, remember = await channel.wait_for_confirm(
+        message, preview, tool_name=tool_name, risk_level=risk,
+    )
+    # 只有 medium_risk 才允许加白名单——high_risk 永远不能"以后不再问"
+    if approve and remember and risk == "medium" and tool_name:
+        auto_approve.add(tool_name)
+        logger.info("hitl added to auto_approve: %s", tool_name)
+    logger.info("hitl resolved tool=%s approve=%s remember=%s risk=%s", tool_name, approve, remember, risk)
+    reject_msg = "" if approve else f"用户拒绝执行 {tool_name or '此操作'}"
+    await _resume_safely(agent, _build_hitl_response(approve, num_actions, reject_msg), config)
+
+
 class AgentRunner:
     async def run(
         self,
@@ -72,10 +216,12 @@ class AgentRunner:
         build_agent_fn,
         config: dict,
     ) -> None:
-        # 默认工具集（send_plan 等）由 framework 提供，闭包绑定到当前 channel。
-        # agent 视角下它们是稳定的"系统工具"；channel 切换时只换底层 IO 实现。
-        extra_tools = make_default_tools(channel)
-        agent = build_agent_fn(extra_tools=extra_tools)
+        # 当前没有 channel-bound 工具——send_plan 已删（仅推一次性"计划预告"列表
+        # 没有状态更新，价值低于多 1 轮 LLM round trip 的代价；任务进度由 step 事件
+        # 自动承载，用户在思考分组里直接看到每个工具的 start/end）。
+        # 未来如果要加 send_progress / send_chart 等同类工具，在这里 inline 构造
+        # 闭包绑定 channel 的 StructuredTool 即可——参考 git log 找 send_plan 的实现样板。
+        agent = build_agent_fn(extra_tools=[])
 
         # 解析 thread_id 拿 user_id（thread_id = "{user_id}_{conversation_id}"）
         thread_id = config.get("configurable", {}).get("thread_id", "")
@@ -86,9 +232,28 @@ class AgentRunner:
         # 仅用于 progress 文案区分"规划中"vs"执行中"——状态推断已经下放给前端。
         business_tools_started = 0
 
+        logger.info(
+            "agent_run START thread=%s message_chars=%d",
+            thread_id, len(message),
+        )
+
         # 被 cancel 时不要关 channel——chat handler 在追问场景下要复用它继续推 SSE。
         # 只有正常结束 / 普通异常时才发 done 事件。
         should_close = True
+        # tool_call_id → 调用元信息（tool_name / parent / start_t）。on_tool_end 时配对，
+        # 实在配不上才退化到 tool_name 本身。run_id 在 langgraph v2 stream 里是稳定的。
+        tool_calls_inflight: dict[str, dict] = {}
+        chat_model_calls = 0
+        # 子 Agent 嵌套栈：on_tool_start tool=task 时压栈（subagent_type），on_tool_end
+        # 时弹栈。栈非空时 = 当前在某个子 Agent 内部，子 Agent 内部触发的所有 step 事件
+        # 都会带上栈顶 subagent name，前端据此做嵌套展示。
+        # 用栈而不是单个变量是为了未来扩展（虽然当前架构 deepagents 不允许 task 嵌套）。
+        subagent_stack: list[str] = []
+        # 子 Agent 当前 LLM 调用累计字数（每次 on_chat_model_start 重置）。
+        # 用于在子 Agent reasoning 阶段（工具调用之间、生成最终 ToolMessage 时）
+        # 给前端推 progress 字数心跳——否则用户看到"派给 XXX 执行中..."几十秒
+        # 没动静，以为卡死。
+        subagent_thinking_chars = 0
         try:
             async for event in agent.astream_events(
                 {"messages": [HumanMessage(content=message)]},
@@ -97,36 +262,150 @@ class AgentRunner:
             ):
                 kind = event["event"]
                 if kind == "on_chat_model_start":
+                    chat_model_calls += 1
+                    # input.messages 是 [[msg, msg, ...]] 嵌套结构（langgraph 给 batch 的）
+                    input_data = event.get("data", {}).get("input", {})
+                    msgs = input_data.get("messages") if isinstance(input_data, dict) else None
+                    msgs_count = len(msgs[0]) if msgs and isinstance(msgs, list) and msgs and isinstance(msgs[0], list) else 0
+                    metadata = event.get("metadata", {}) or {}
+                    node = metadata.get("langgraph_node", "?")
+                    logger.info(
+                        "on_chat_model_start #%d node=%s msgs_in_context=%d run_id=%s subagent_ctx=%s",
+                        chat_model_calls, node, msgs_count, event.get("run_id", "?"),
+                        subagent_stack[-1] if subagent_stack else "-",
+                    )
+                    # 子 Agent 内部 LLM 调用：在 thinking 分组里加一条"思考分析中"占位 step。
+                    # 否则子 Agent 在工具调用之间（甚至生成最终 ToolMessage 时）reasoning
+                    # 几十秒，前端只看到"派给 XXX 执行中..."一条 stuck 标记，像卡死了。
+                    # 这条 step 在 on_chat_model_end 时配对关闭。
+                    if subagent_stack:
+                        cn = _SUBAGENT_CN_LABELS.get(subagent_stack[-1], subagent_stack[-1])
+                        await channel.send_step(f"🧠 {cn}思考分析", "tool_start", subagent=subagent_stack[-1])
+                        subagent_thinking_chars = 0
                     # Cover the silent gap before the LLM emits its first tool_call.
                     msg = "AI 正在规划任务..." if business_tools_started == 0 else "AI 正在准备下一步..."
                     await channel.send_progress(msg)
+                elif kind == "on_chat_model_end":
+                    output = event.get("data", {}).get("output")
+                    tool_calls = []
+                    if output is not None:
+                        # AIMessage / dict 都可能
+                        tc = getattr(output, "tool_calls", None) or (
+                            output.get("tool_calls") if isinstance(output, dict) else None
+                        )
+                        if tc:
+                            tool_calls = [
+                                {"name": c.get("name"), "args_keys": list((c.get("args") or {}).keys())}
+                                for c in tc
+                            ]
+                    metadata = event.get("metadata", {}) or {}
+                    logger.info(
+                        "on_chat_model_end node=%s tool_calls=%d subagent_ctx=%s %s",
+                        metadata.get("langgraph_node", "?"),
+                        len(tool_calls),
+                        subagent_stack[-1] if subagent_stack else "-",
+                        _safe_json(tool_calls, 600),
+                    )
+                    # 子 Agent 内部 LLM 调用结束：关闭对应的"思考分析"step
+                    if subagent_stack:
+                        cn = _SUBAGENT_CN_LABELS.get(subagent_stack[-1], subagent_stack[-1])
+                        await channel.send_step(f"🧠 {cn}思考分析", "tool_end", subagent=subagent_stack[-1])
                 elif kind == "on_chat_model_stream":
+                    # 子 Agent 内部的 LLM token 不推给用户——子 Agent 的输出是
+                    # 给主 Agent 的 ToolMessage，会被主 Agent 消化后再以最终
+                    # markdown token 流的形式产出。如果在这里把子 Agent 的 token
+                    # 也推到前端，用户会看到"子 Agent 自己的报告 + 主 Agent 又
+                    # 总结一份"两份重复内容。
+                    if subagent_stack:
+                        # ============================================================
+                        # 字数心跳：当前**不会**实际触发，但保留实现 + 单测锁住契约。
+                        # ------------------------------------------------------------
+                        # 原因：deepagents 的 task 工具内部用
+                        #   `await subagent.ainvoke(state)`  (subagents.py:439)
+                        # 而不是 astream_events——子 Agent 的 LLM token stream 事件
+                        # **不冒泡**到外层 astream_events 循环，所以这个分支在生产里
+                        # 几乎拿不到 chunk。后果：用户在子 Agent 长时间 reasoning 时
+                        # 看不到字数滚动；好在我们已经通过 on_chat_model_start/end
+                        # 推出"🧠 思考分析"占位 step，节奏感够了。
+                        #
+                        # 留着这段代码是为了：
+                        # 1) 如果 deepagents 上游改成 astream 透传 stream 事件，
+                        #    或我们后续 monkey-patch _build_task_tool，这段会自动
+                        #    生效，不需要再改 runner；
+                        # 2) test_subagent_progress_heartbeat_with_char_count 用 mock
+                        #    注入 stream 事件，锁住"如果 stream 触发了，runner 按预期
+                        #    推字数心跳"这个契约。
+                        #
+                        # 删掉的话以后想恢复就要重新论证 + 写代码，回归成本更高。
+                        # ============================================================
+                        chunk = event["data"].get("chunk")
+                        content = chunk.content if chunk and hasattr(chunk, "content") else ""
+                        if content:
+                            prev = subagent_thinking_chars
+                            subagent_thinking_chars += len(content)
+                            if subagent_thinking_chars // 50 > prev // 50:
+                                cn = _SUBAGENT_CN_LABELS.get(subagent_stack[-1], subagent_stack[-1])
+                                await channel.send_progress(
+                                    f"🧠 {cn}思考中（已生成 {subagent_thinking_chars} 字）..."
+                                )
+                        continue
                     chunk = event["data"].get("chunk")
                     if chunk and hasattr(chunk, "content") and chunk.content:
                         await channel.send_token(chunk.content)
                 elif kind == "on_tool_start":
                     tool_name = event.get("name", "tool")
-                    if _is_meta_tool(tool_name):
-                        continue
-                    business_tools_started += 1
-                    # artifact env 注入由 skill_loader.run_command 内部完成——它显式给
-                    # subprocess 传 env={ADS_AGENT_ARTIFACT_DIR/ID/USER_ID}。这里 runner
-                    # 不再设 os.environ，因为 langchain 用 create_task 派发 tool 协程，
-                    # runner 在 on_tool_start 设 env 与 subprocess 启动有 race。
                     input_data = event.get("data", {}).get("input", {})
-                    step_msg = _format_tool_label(tool_name, input_data)
-                    await channel.send_step(step_msg, "tool_start")
+                    metadata = event.get("metadata", {}) or {}
+                    node = metadata.get("langgraph_node", "?")
+                    run_id = event.get("run_id", "?")
+                    tool_calls_inflight[run_id] = {
+                        "tool_name": tool_name,
+                        "node": node,
+                        "t_start": asyncio.get_event_loop().time(),
+                    }
+                    logger.info(
+                        "on_tool_start tool=%s node=%s meta=%s subagent_ctx=%s input=%s",
+                        tool_name, node, _is_meta_tool(tool_name),
+                        subagent_stack[-1] if subagent_stack else "-",
+                        _safe_json(input_data),
+                    )
+                    # task 工具自身的 step 事件**在压栈之前**发出——它的 subagent 上下文
+                    # 是"派给谁"，不是"谁内部触发的"，所以仍然属于上层（栈顶或主 Agent）。
+                    # 然后再压栈，让 task 内部的工具 step 都带新栈顶的 subagent 标记。
+                    parent_subagent = subagent_stack[-1] if subagent_stack else None
+                    if not _is_meta_tool(tool_name):
+                        business_tools_started += 1
+                        step_msg = _format_tool_label(tool_name, input_data)
+                        await channel.send_step(step_msg, "tool_start", subagent=parent_subagent)
+                    if tool_name == "task" and isinstance(input_data, dict):
+                        st = input_data.get("subagent_type")
+                        if st:
+                            subagent_stack.append(st)
                 elif kind == "on_tool_end":
                     tool_name = event.get("name", "tool")
-                    if _is_meta_tool(tool_name):
-                        continue
                     input_data = event.get("data", {}).get("input", {})
-                    await channel.send_step(_format_tool_label(tool_name, input_data), "tool_end")
+                    output = event.get("data", {}).get("output", "")
+                    output_text = output if isinstance(output, str) else getattr(output, "content", "")
+                    run_id = event.get("run_id", "?")
+                    inflight = tool_calls_inflight.pop(run_id, {})
+                    elapsed = (asyncio.get_event_loop().time() - inflight["t_start"]) if "t_start" in inflight else None
+                    # 弹栈要在 send_step 之前——task 自身的 tool_end step 应该
+                    # 归属于"派工方"（栈顶不含自己）的层级。
+                    if tool_name == "task" and subagent_stack:
+                        subagent_stack.pop()
+                    parent_subagent = subagent_stack[-1] if subagent_stack else None
+                    logger.info(
+                        "on_tool_end tool=%s node=%s elapsed=%s subagent_ctx=%s output_chars=%d output_head=%r",
+                        tool_name, inflight.get("node", "?"),
+                        f"{elapsed:.2f}s" if elapsed is not None else "?",
+                        parent_subagent or "-",
+                        len(output_text or ""), (output_text or "")[:300],
+                    )
+                    if not _is_meta_tool(tool_name):
+                        await channel.send_step(_format_tool_label(tool_name, input_data), "tool_end", subagent=parent_subagent)
                     # 工具结束后从 output 抽 artifact_ids（用 sentinel 解析），推 SSE。
                     # langgraph 在 on_tool_end 给的 output 通常是 ToolMessage（含 content 字段），
                     # 而 langchain 裸 tool astream 给的是 str——两种都要兼容。
-                    output = event.get("data", {}).get("output", "")
-                    output_text = output if isinstance(output, str) else getattr(output, "content", "")
                     if output_text:
                         for artifact_id in extract_artifact_ids_from_output(output_text):
                             await channel.send_artifact_updated(artifact_id, "created")
@@ -135,25 +414,24 @@ class AgentRunner:
                     if isinstance(outputs, dict) and "__interrupt__" in outputs:
                         interrupts = outputs["__interrupt__"]
                         iv = interrupts[0].value if interrupts else {}
-                        if not isinstance(iv, dict):
-                            iv = {"message": str(iv), "preview": []}
-                        approve = await channel.wait_for_confirm(
-                            iv.get("message", ""), iv.get("preview", [])
-                        )
-                        await _resume_safely(agent, approve, config)
+                        await _handle_interrupt(iv, channel, agent, config, cfg.agent.interrupt_on)
         except asyncio.CancelledError:
+            logger.info("agent_run CANCELLED thread=%s", thread_id)
             should_close = False  # chat handler 会在同一 channel 上接着跑新一轮
             raise
         except GraphInterrupt as e:
+            logger.info("agent_run INTERRUPT thread=%s", thread_id)
             interrupts = e.args[0] if e.args else []
             iv = interrupts[0].value if interrupts else {}
-            if not isinstance(iv, dict):
-                iv = {"message": str(iv), "preview": []}
-            approve = await channel.wait_for_confirm(iv.get("message", ""), iv.get("preview", []))
-            await _resume_safely(agent, approve, config)
+            await _handle_interrupt(iv, channel, agent, config, cfg.agent.interrupt_on)
         except Exception as e:
+            logger.exception("agent_run ERROR thread=%s err=%s", thread_id, e)
             await channel.send_token(f"\n[错误] {e}")
         finally:
+            logger.info(
+                "agent_run END thread=%s chat_model_calls=%d business_tools=%d inflight_leftover=%d",
+                thread_id, chat_model_calls, business_tools_started, len(tool_calls_inflight),
+            )
             if should_close:
                 await channel.close()
 

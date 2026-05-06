@@ -4,6 +4,7 @@
       <span class="brand">华为广告数据助手</span>
       <span class="user-tag">{{ userId }}</span>
       <button class="btn-new" @click="$router.push('/artifacts')">📦 我的工作区</button>
+      <button class="btn-new" @click="$router.push('/preferences')">⚙️ 设置</button>
       <button class="btn-new" @click="clearChat">新对话</button>
       <button class="btn-logout" @click="logout">退出</button>
     </header>
@@ -136,6 +137,8 @@
       :visible="isInterrupted"
       :message="interruptMsg"
       :preview="interruptPreview"
+      :tool-name="interruptToolName"
+      :risk-level="interruptRiskLevel"
       @confirm="handleConfirm"
     />
     <div v-if="browsingArtifactId" class="artifact-overlay" @click.self="browsingArtifactId = null">
@@ -169,6 +172,8 @@ const isStreaming = ref(false)
 const isInterrupted = ref(false)
 const interruptMsg = ref('')
 const interruptPreview = ref([])
+const interruptToolName = ref('')
+const interruptRiskLevel = ref('medium')  // 'high' | 'medium'
 const systemSkills = ref([])
 const userSkills = ref([])
 const fileInputRef = ref(null)
@@ -178,7 +183,10 @@ const messagesEl = ref(null)
 // 当前流式文本气泡在 messages 中的下标。token 累加到这里，非 token 事件复位。
 const currentStreamingIdx = ref(null)
 // 当前思考过程分组在 messages 中的下标。所有 plan/step 事件 append 进这个分组。
-// token 到来时关闭分组，让下次 plan/step 自然新开下一个。
+// 一个对话回合**只有一个** thinking 分组——token 流不再关闭它，避免主 Agent
+// 在 task 工具调用前后插入的过渡 token（"我来按步骤完成..."这种）把同一回合的
+// step 事件拆成多个"思考过程"分组、用户分不清主/子 Agent 在干啥。
+// 真正的回合边界：sendOrAppend 开始时 reset 为 null。
 const currentThinkingIdx = ref(null)
 const progressText = ref('')
 // conversationId: 同一对话内多轮共享，"新对话"按钮重置为 null（后端会生成新 id）
@@ -348,21 +356,15 @@ async function sendOrAppend() {
         })
         scrollToBottom()
       },
-      plan: (data) => {
-        // send_plan 工具调用——LLM 在执行业务工具前声明的任务计划。
-        // 整段计划渲染为单条 thinking entry，按设计只声明一次，后续不更新状态。
-        closeStreaming()
-        const tasks = Array.isArray(data.tasks) ? data.tasks : []
-        if (!tasks.length) return
-        const lines = tasks.map(t => `  ⬜ ${t.name || t.id || ''}`).join('\n')
-        appendLog({ label: `📋 任务计划：\n${lines}`, kind: 'plan' })
-      },
       step: (data) => {
         closeStreaming()
         // 同一工具的 start/end 是同一条 log 的状态变化，不是两条独立条目。
         // 不用图标，靠 "执行中..." 后缀表达运行态——end 漏报时也只是后缀残留，不会误显示假完成。
+        // data.subagent 存在 = 当前工具在某个子 Agent 内部执行，前缀加 "↳" + 缩进，
+        // 让用户一眼看出"这是子 Agent 干的活"，不是主 Agent 调的。
         if (data.type === 'tool_start') {
-          appendLog({ label: `${data.msg} 执行中...`, kind: 'running' })
+          const indent = data.subagent ? '   ↳ ' : ''
+          appendLog({ label: `${indent}${data.msg} 执行中...`, kind: 'running', subagent: data.subagent || null })
         } else {
           const group = currentThinkingIdx.value !== null
             ? messages.value[currentThinkingIdx.value]
@@ -383,8 +385,13 @@ async function sendOrAppend() {
         // append-only 模式下不需要状态推断，忽略
       },
       token: (data) => {
-        // 流式 token：关闭思考分组，累加到当前 assistant 气泡
-        closeThinking()
+        // 流式 token 累加到当前 assistant 气泡。
+        // 故意**不**关闭 thinking 分组——主 Agent 经常在 task 工具调用前先输出
+        // 一句过渡话（"我来按步骤完成..."），如果这时关掉 thinking，后续子
+        // Agent 内部的 step 事件会另起新分组，前端就出现"思考过程"标题反复
+        // 出现，用户分不清是主 Agent 还是子 Agent 的活。
+        // 同回合所有 step 都聚合到 sendOrAppend 开始时创建的那个 thinking 分组，
+        // 文本气泡按 currentStreamingIdx 单独累积，messages 数组顺序天然保留时序。
         if (currentStreamingIdx.value === null) {
           messages.value.push({ role: 'assistant', type: 'text', content: data.token })
           currentStreamingIdx.value = messages.value.length - 1
@@ -405,6 +412,8 @@ async function sendOrAppend() {
         // 清成 false 会导致输入框激活、新对话覆盖 sseClient、孤立旧连接。
         interruptMsg.value = data.message || data.msg || '需要您确认此操作'
         interruptPreview.value = data.preview || []
+        interruptToolName.value = data.tool_name || ''
+        interruptRiskLevel.value = data.risk_level || 'medium'
       },
       done: () => {
         closeStreaming()
@@ -446,12 +455,20 @@ async function sendOrAppend() {
   isStreaming.value = false
 }
 
-async function handleConfirm(action) {
+async function handleConfirm(payload) {
+  // payload: { action: 'approve'|'cancel', addToAutoApprove: bool }
+  // 兼容老用法（直接传字符串）：
+  const action = typeof payload === 'string' ? payload : payload.action
+  const addToAutoApprove = typeof payload === 'string' ? false : !!payload.addToAutoApprove
   isInterrupted.value = false
   await fetch(`/api/chat/${userId}/confirm`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ action, session_id: sseClient?.sessionId }),
+    body: JSON.stringify({
+      action,
+      session_id: sseClient?.sessionId,
+      add_to_auto_approve: addToAutoApprove,
+    }),
   })
 }
 

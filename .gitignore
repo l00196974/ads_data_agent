@@ -21,6 +21,14 @@ login-page-*
 chat-*.png
 exec-*.png
 e2e-*.png
+prefs-*.png
+subagent-*.png
+thinking-*.png
+
+# Benchmark / one-off probe scripts（临时验证用，不入仓）
+bench_result.jsonl
+scripts/benchmark_*.py
+scripts/probe_*.py
 
 # Memory / hook plugin runtime data
 .remember/

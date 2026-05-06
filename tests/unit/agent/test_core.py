@@ -131,18 +131,33 @@ def test_build_model_openai_protocol(monkeypatch):
     assert isinstance(model, ChatOpenAI)
 
 
-def test_build_model_anthropic_returns_chatanthropic_instance():
-    """After the LLM-construction unification, anthropic returns a real
-    ChatAnthropic instance (not a "provider:model" spec string), and
-    cfg.llm.api_key is honored — no silent fallback to env vars."""
+def test_build_model_ignores_provider_field_uses_chatopenai_uniformly():
+    """provider 字段不再影响 _build_model 行为——所有 provider 值都返回 ChatOpenAI
+    实例（OpenAI 兼容代理协议统一）。historical anthropic / google_genai 直连路径已删。
+    provider 字段保留只为兼容旧 config.yaml / .env 不报错，不参与逻辑分支。"""
     from agent.config import AppConfig, LLMConfig
     from agent.core import _build_model
-    from langchain_anthropic import ChatAnthropic
+    from langchain_openai import ChatOpenAI
 
+    # 即使配 provider="anthropic" 也走 ChatOpenAI（OpenAI 兼容代理 + base_url）
     cfg = AppConfig(
-        llm=LLMConfig(provider="anthropic", model="claude-sonnet-4-6", api_key="sk-ant-test")
+        llm=LLMConfig(
+            provider="anthropic",
+            model="some-model",
+            api_key="sk-test",
+            base_url="https://my-proxy.example.com/v1",
+        )
     )
     model = _build_model(cfg)
-    assert isinstance(model, ChatAnthropic)
-    # api_key wraps in SecretStr; just confirm it was set non-empty (no silent env fallback)
-    assert model.anthropic_api_key is not None
+    assert isinstance(model, ChatOpenAI)
+
+
+def test_build_model_no_base_url_still_works():
+    """没配 base_url 也能跑——走 OpenAI 自家 endpoint。"""
+    from agent.config import AppConfig, LLMConfig
+    from agent.core import _build_model
+    from langchain_openai import ChatOpenAI
+
+    cfg = AppConfig(llm=LLMConfig(provider="openai", model="gpt-4o-mini", api_key="sk-test"))
+    model = _build_model(cfg)
+    assert isinstance(model, ChatOpenAI)

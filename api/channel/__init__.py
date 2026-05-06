@@ -1,5 +1,4 @@
 from .base import BaseChannel, ExternallyConfirmable
-from .default_tools import make_default_tools
 from .registry import (
     ChannelRegistry,
     InMemoryChannelRegistry,
@@ -21,5 +20,4 @@ __all__ = [
     "AgentRunner",
     "agent_runner",
     "WebSSEChannel",
-    "make_default_tools",
 ]

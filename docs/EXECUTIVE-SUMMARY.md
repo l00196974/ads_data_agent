@@ -19,7 +19,7 @@ Agent: 调 query-metrics → 调 detect-anomaly → 输出 Markdown 报告 + 折
 
 服务对象**仅限内部人员**——不针对 C 端用户、广告主自助平台、实时投放决策、端侧/广告主配置维护。
 
-技术栈：FastAPI + Vue 3 + LangGraph/deepagents + 双协议 LLM 路由 + AsyncSqlite 持久化。
+技术栈：FastAPI + Vue 3 + LangGraph/deepagents + OpenAI 兼容协议 LLM 客户端 + AsyncSqlite 持久化。
 
 ---
 
@@ -203,7 +203,7 @@ if isinstance(channel, ExternallyConfirmable):
 | HitL 三场景 | ✅ 框架就绪，业务未启用 | 危险操作确认 / 用户主动停止 / 执行中追加要求；当前阶段无写操作，预留给未来扩展 |
 | 流式 SSE 协议 | ✅ | 7 种 event 类型，跨 chunk 解析 |
 | 多用户隔离 | ✅ | thread_id 复合键 + UserSpace 文件隔离 |
-| LLM 双协议路由 | ✅ | OpenAI 兼容代理 + Anthropic 直连 |
+| LLM 客户端 | ✅ | OpenAI 兼容协议（base_url 切后端：火山方舟 / DeepSeek / 通义 / OpenAI） |
 | 长上下文管理 | ✅ | SubAgent 主方案 + ToolOutputTruncation + Summarization 兜底 |
 | 持久化 | ✅ | AsyncSqliteSaver（checkpoint）+ AsyncSqliteStore（store） |
 | Channel 抽象 | ✅ | Web SSE / CLI 已实现，Slack/WebSocket 接入零改动 |
@@ -337,7 +337,7 @@ docs/
 | `agent/checkpointer.py` | AsyncSqliteSaver 生命周期 + Summarization monkey-patch |
 | `agent/store.py` | AsyncSqliteStore 生命周期 + backend 选择器 |
 | `agent/skill_loader.py` | SKILL.md 包加载（含安全模型） |
-| `agent/llm.py` | LLM 双协议路由 |
+| `agent/llm.py` | LLM 客户端构造（OpenAI 兼容协议） |
 | `api/channel/base.py` | BaseChannel 抽象 + ExternallyConfirmable Protocol |
 | `api/channel/default_tools.py` | `make_default_tools(channel)` 工厂（send_plan） |
 | `api/channel/runner.py` | AgentRunner 事件流转发 |

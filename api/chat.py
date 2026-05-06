@@ -4,6 +4,7 @@ from uuid import uuid4
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
+from agent import auto_approve
 from agent.config import load_config
 from agent.core import build_agent
 from agent.session import SessionManager
@@ -29,15 +30,9 @@ PLAN_INSTRUCTION = """## 执行流程（严格遵守）
 
 收到用户问题后，按以下顺序执行：
 
-1. **首先调用 `send_plan` 工具**声明本次任务计划。
-
-   - tasks 列表 2-5 项，每项 `{"id": "t1", "name": "..."}`
-   - name 用简短中文，≤20 字（如"查询点击数据"、"汇总并生成图表"）
-   - id 顺序为 t1, t2, t3...
-   - **只在最开始调一次**，不要反复调用、不要中途追加
-
-2. **按计划逐项调用业务工具**（即 `run_command`，每次传一条 CLI 命令），
-   一次一个，不输出中间散文。
+1. **直接调用业务工具**（即 `run_command`，每次传一条 CLI 命令），一次一个，
+   不输出中间散文。前端会自动展示每个工具的执行进度（开始 → 结束），不需要你
+   主动报告。
 
    **重要**：`run_command` 的 `command` 参数是**子命令名 + 参数**，**不要**前缀 skill 包名。
    即使用户说"调用 demo-artifact-writer 的 write-demo-report"，你也应该传：
@@ -48,10 +43,10 @@ PLAN_INSTRUCTION = """## 执行流程（严格遵守）
    已注册的子命令清单见下方"业务技能"段——`run_command` 只接受这些子命令名，
    传 skill 包名会得到 `Error: 未注册的命令` 错误。
 
-3. **业务工具全部执行完毕后，直接以 Markdown 文本输出最终分析结果**——
+2. **业务工具全部执行完毕后，直接以 Markdown 文本输出最终分析结果**——
    系统会把你的文字逐 token 流式推送到前端。
 
-4. **（可选）需要展示图表时，把图表作为 markdown 代码块嵌进文本里**，
+3. **（可选）需要展示图表时，把图表作为 markdown 代码块嵌进文本里**，
    语言标识用 `chart`，内容是一段 JSON：
 
    ~~~
@@ -65,22 +60,21 @@ PLAN_INSTRUCTION = """## 执行流程（严格遵守）
    - `series`: 每项 `{"name": "...", "data": [...]}`
    - **不要为图表单独调用任何工具**——前端会扫 markdown 里的 ```chart``` 代码块自动渲染
 
-5. **（可选）最后再输出一行 Markdown 引导追问**（如"如需下钻分析某渠道..."）。
+4. **（可选）最后再输出一行 Markdown 引导追问**（如"如需下钻分析某渠道..."）。
 
 ## 不要做的事
 
 - ❌ 不要在工具调用之前 / 之间输出"我现在要查询..."、"接下来..."这种散文
 - ❌ 不要重复声明你要做什么——直接做即可。前端会自动展示工具执行进度
-- ❌ 不要调用任何额外的"进度 / 图表 / 摘要"性质的工具——除 `send_plan` 外，
-   一律通过最终 Markdown 文本输出，避免无谓的 LLM round trip
+- ❌ 不要调用任何额外的"进度 / 计划 / 图表 / 摘要"性质的工具——一律通过最终
+   Markdown 文本输出，避免无谓的 LLM round trip
 
 ## 标准示例
 
 用户问"查询最近7天点击数据并生成折线图"，假设 SKILL.md 注册了 `query-metrics`：
 
-1. `send_plan(tasks=[{"id":"t1","name":"查询点击数据"},{"id":"t2","name":"生成趋势图"}])`
-2. `run_command(command="query-metrics --metrics click --start-date 2026-04-21 --end-date 2026-04-27 --time-mode event --dimensions day")`
-3. 直接输出 Markdown：
+1. `run_command(command="query-metrics --metrics click --start-date 2026-04-21 --end-date 2026-04-27 --time-mode event --dimensions day")`
+2. 直接输出 Markdown：
 
 ~~~
 **最近7天点击趋势**
@@ -195,13 +189,42 @@ async def confirm(user_id: str, req: ConfirmRequest):
         return {"status": "not_found"}
     if not isinstance(channel, ExternallyConfirmable):
         return {"status": "not_supported_on_this_channel"}
-    channel.resolve_confirm(req.action == "approve")
+    channel.resolve_confirm(req.action == "approve", add_to_auto_approve=req.add_to_auto_approve)
     return {"status": "ok"}
 
 
 @router.post("/{user_id}/cancel")
 async def cancel(user_id: str):
     return {"status": "cancelled"}
+
+
+@router.get("/preferences/auto_approve")
+async def list_auto_approve():
+    """列出全部"以后不再确认"的工具名（全局共享、所有用户可见）。
+    设置页用此列表展示，让用户可以撤销某条免确认。"""
+    return {"tools": auto_approve.list_all()}
+
+
+@router.post("/preferences/auto_approve/{tool_name}")
+async def add_auto_approve(tool_name: str):
+    """直接把工具加入全局白名单。
+
+    主要走这两个调用方：
+      - 用户在 confirm 弹窗里勾"以后不再确认"——经由 /confirm endpoint 间接调用 auto_approve.add()
+      - 运维 / 管理员场景——curl POST 直接加（绕过 HitL 流程）
+
+    front-end 设置页**不**直接用此端点（用户应当通过弹窗勾选触发，而不是凭空加），
+    但保留给运维 / 测试 / 自动化脚本用。
+    """
+    auto_approve.add(tool_name)
+    return {"status": "ok", "tools": auto_approve.list_all()}
+
+
+@router.delete("/preferences/auto_approve/{tool_name}")
+async def remove_auto_approve(tool_name: str):
+    """从全局白名单撤销某个工具——下次该工具被 medium_risk 拦截时重新弹窗。"""
+    auto_approve.remove(tool_name)
+    return {"status": "ok", "tools": auto_approve.list_all()}
 
 
 @router.post("/{user_id}/append")

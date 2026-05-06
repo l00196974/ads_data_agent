@@ -139,13 +139,12 @@ skills:
 **路由规则**（`agent/llm.py::_build_model`）：
 
 ```
-if cfg.llm.base_url 非空 OR cfg.llm.provider == "openai":
-    → ChatOpenAI(api_key, base_url, model)
-else:
-    → langchain.chat_models.init_chat_model(f"{provider}:{model}", api_key=...)
+所有 provider 统一走 ChatOpenAI(api_key, base_url, model)
+不同后端通过 base_url 切换；provider 字段保留只为兼容旧 .env，不影响逻辑分支。
 ```
 
-详见 [02-features/09-llm-dual-protocol-routing.md](../02-features/09-llm-dual-protocol-routing.md)。
+详见 `agent/llm.py` 实现（10 行代码）。历史曾支持 anthropic / google_genai 直连
+（双协议路由），已删——多协议是过度设计。
 
 #### 厂商对照示例
 

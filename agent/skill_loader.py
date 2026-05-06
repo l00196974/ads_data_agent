@@ -31,15 +31,20 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import shlex
 import sys
+import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
 from langchain_core.tools import StructuredTool
+
+logger = logging.getLogger(__name__)
 
 # alias 是为了避开 lint 钩子对 `exec(` 字面量的告警；语义是安全的 list-form 子进程 API
 from asyncio import create_subprocess_exec as _spawn_subprocess
@@ -129,17 +134,24 @@ def _make_run_tool(
         系统按 shlex 拆分参数（list-form 调用，无 shell 注入风险），按脚本扩展名自动选择
         node/python/bash 解释器，cwd 设为该 skill 所在目录（CSV 等私有配置能正确加载）。
         """
+        call_id = uuid.uuid4().hex[:8]
+        t_start = time.perf_counter()
+        logger.info("run_command[%s] REQUEST command=%r", call_id, command)
+
         try:
             # posix=True 才会去引号——'foo "bar baz"' → ['foo', 'bar baz']。
             # posix=False 把引号当字面量留在参数里，下游 CLI 解析就错了。
             parts = shlex.split(command, posix=True)
         except ValueError as e:
+            logger.warning("run_command[%s] PARSE_FAIL err=%s", call_id, e)
             return f"Error: 命令解析失败：{e}"
         if not parts:
+            logger.warning("run_command[%s] EMPTY_COMMAND", call_id)
             return "Error: 命令不能为空"
 
         subcmd = parts[0]
         if subcmd not in commands:
+            logger.warning("run_command[%s] UNKNOWN_SUBCMD subcmd=%s available=%s", call_id, subcmd, available)
             return f"Error: 未注册的命令 '{subcmd}'。可用命令：{available}"
 
         cmd_argv = _resolve_command(commands[subcmd]) + parts[1:]
@@ -165,6 +177,12 @@ def _make_run_tool(
             env["ADS_AGENT_ARTIFACT_ID"] = artifact_id
             env["ADS_AGENT_USER_ID"] = user_id
 
+        artifact_id_log = env.get("ADS_AGENT_ARTIFACT_ID", "-")
+        logger.info(
+            "run_command[%s] SPAWN subcmd=%s argv=%r cwd=%s artifact_id=%s",
+            call_id, subcmd, cmd_argv, str(workdirs[subcmd]), artifact_id_log,
+        )
+
         proc = await _spawn_subprocess(
             *cmd_argv,
             cwd=str(workdirs[subcmd]),
@@ -176,10 +194,26 @@ def _make_run_tool(
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
         except asyncio.TimeoutError:
             proc.kill()
+            elapsed = time.perf_counter() - t_start
+            logger.warning("run_command[%s] TIMEOUT subcmd=%s elapsed=%.2fs", call_id, subcmd, elapsed)
             return f"Error: 命令 '{subcmd}' 执行超时（60s）"
 
         out = stdout.decode("utf-8", errors="replace")
         err = stderr.decode("utf-8", errors="replace")
+        elapsed = time.perf_counter() - t_start
+
+        logger.info(
+            "run_command[%s] DONE exit=%d elapsed=%.2fs stdout_chars=%d stderr_chars=%d",
+            call_id, proc.returncode, elapsed, len(out), len(err),
+        )
+        # stdout 头/尾各 800 字符（中间常见的是 mock JSON 数据，diagnose 时主要看头尾）
+        logger.debug(
+            "run_command[%s] STDOUT[:1600] %s",
+            call_id,
+            (out[:800] + " ...<TRUNC>... " + out[-800:]) if len(out) > 1600 else out,
+        )
+        if err.strip():
+            logger.debug("run_command[%s] STDERR[:2000] %s", call_id, err[:2000])
 
         artifact_ids, err_clean = _extract_artifact_ids(err)
         trailer = ""
@@ -190,8 +224,13 @@ def _make_run_tool(
             trailer = "\n\n" + "\n".join(
                 f"[已生成 artifact: {aid}]" for aid in artifact_ids
             )
+            logger.info("run_command[%s] ARTIFACTS produced=%s", call_id, artifact_ids)
 
         if proc.returncode != 0:
+            logger.warning(
+                "run_command[%s] NON_ZERO_EXIT exit=%d stderr_head=%r",
+                call_id, proc.returncode, err_clean[:500],
+            )
             return f"[exit {proc.returncode}] {subcmd}\nstderr:\n{err_clean}\nstdout:\n{out}{trailer}"
         return out + trailer
 

@@ -137,7 +137,7 @@ runner 把 langgraph 的 `astream_events("v2")` 输出转成 channel 调用：
 | `on_chat_model_stream` | 逐 chunk 转发 | `send_token` | `token` |
 | `on_tool_start` (业务工具) | 格式化 label | `send_step` (tool_start) | `step` |
 | `on_tool_end` (业务工具) | 同上 | `send_step` (tool_end) | `step` |
-| `on_tool_start/end` (`send_*` 前缀) | 跳过（meta tool） | — | — |
+| `on_tool_start/end` (deepagents framework 工具：`write_todos` / `read_todos` / `read_file` / `ls`) | 跳过（meta tool） | — | — |
 | `on_chain_end` 含 `__interrupt__` | 阻塞 wait | `wait_for_confirm` | `interrupt` |
 | 流正常退出 | — | `close` | `done` |
 | 流异常 | 错误文本 | `send_token`（带 `[错误]` 前缀） | `token`（非 `error`，详见 sse-event-types.md） |
@@ -149,13 +149,21 @@ runner 把 langgraph 的 `astream_events("v2")` 输出转成 channel 调用：
 ## 六、Meta tool 过滤：`_is_meta_tool`
 
 ```python
+_FRAMEWORK_META_TOOLS = frozenset({
+    "write_todos", "read_todos",  # TodoListMiddleware：agent 自维护 TODO 状态
+    "read_file", "ls",            # FilesystemMiddleware 只读类：噪音多无价值
+})
+
 def _is_meta_tool(name: str) -> bool:
-    return name.startswith("send_")
+    return name in _FRAMEWORK_META_TOOLS
 ```
 
-所有 `send_*` 前缀的工具被认为是"框架默认 IO 工具"——不是业务步骤，不在 step 流里展示。
-当前默认 tool 集只有 `send_plan`，但前缀过滤是预留的——未来加 `send_progress` /
-`send_artifact` 等不需要改 `_is_meta_tool`。
+deepagents 默认 middleware 注入的"自我管理"工具（agent 内部簿记）从 step 事件流过滤，
+避免前端步骤列表被噪音淹没。新增此类工具时把名字加进 `_FRAMEWORK_META_TOOLS` 集合即可。
+
+注意：`write_file` / `edit_file` 故意**不**在过滤名单——它们在用户工作区写文件，
+是用户真关心的"agent 在我空间里做了什么"业务事件，必须展示，且默认在 medium_risk 列表
+里会触发 HitL 弹窗。
 
 业务工具（`run_command` 等）就不会被过滤，正常推 step 事件。
 

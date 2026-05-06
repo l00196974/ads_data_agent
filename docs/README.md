@@ -46,7 +46,6 @@ Consequences / Alternatives*。
 | [06-multi-user-isolation](02-features/06-multi-user-isolation.md) | thread_id + UserSpace 多用户隔离 |
 | [07-subagent-driven-context](02-features/07-subagent-driven-context.md) | ★ SubAgent 主→子任务委派（长上下文主方案） |
 | [08-context-fallback](02-features/08-context-fallback.md) | ToolOutputTruncation + Summarization 兜底 |
-| [09-llm-dual-protocol-routing](02-features/09-llm-dual-protocol-routing.md) | OpenAI 兼容 / Anthropic 双路径路由 |
 | [10-persistence-and-checkpoints](02-features/10-persistence-and-checkpoints.md) | AsyncSqliteSaver + AsyncSqliteStore |
 | [11-system-skills-catalog](02-features/11-system-skills-catalog.md) | 系统内置业务 skill（SKILL.md 加载） |
 | [12-user-skill-upload](02-features/12-user-skill-upload.md) | 用户自定义 skill 上传 |

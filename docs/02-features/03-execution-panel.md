@@ -1,8 +1,14 @@
 # 03 执行计划面板（Execution Plan Panel）
 
+> ⛔ **本文档描述的功能已下线**（2026-05-04）。`send_plan` 工具 + `plan` SSE 事件 + 前端
+> 任务计划面板均已删除——一次性预告无状态更新，价值低于多 1 轮 LLM round trip 的代价。
+> 任务进度现在由 `step` 事件承载（详见 [05-streaming-sse-protocol.md](./05-streaming-sse-protocol.md)
+> 和 [03-api-reference/sse-event-types.md](../03-api-reference/sse-event-types.md)）。
+> 本文档保留作为历史设计参考——如未来要恢复 plan 面板，先读 ADR-013 + 本文 §四 §六。
+
 > **前置**：先读 [01-skill-tool-channel-model.md](./01-skill-tool-channel-model.md)。
 
-## 一、用户视角
+## 一、用户视角（历史）
 
 用户提问后，前端在思考过程区域插入一段固定的"任务计划"列表，让用户**在工具开始执行前**
 就看到 Agent 打算做什么、分几步：

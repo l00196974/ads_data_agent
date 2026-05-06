@@ -1,7 +1,7 @@
 import os
 import yaml
 from pathlib import Path
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -53,17 +53,59 @@ class SubAgentSpec(BaseModel):
     model: str | None = None   # 可选，"provider:model" 格式覆盖主 Agent 模型
 
 
+class InterruptConfig(BaseModel):
+    """HitL 拦截规则，按风险分级。
+
+    - **high_risk**：强制弹窗确认，**忽略**用户的免确认白名单。用于不可逆 / 可观测影响大的
+      操作（如改投放预算、删广告组、暂停投放）。即使用户某次勾选"以后不再问"，下次还是要确认。
+    - **medium_risk**：默认弹窗确认，但用户可在弹窗里勾"以后不再确认 [工具名]"加入全局
+      白名单（`data/auto_approve.yaml`）。用于"不可逆但不致命"的动作（创建人群、创建临时表、
+      生成报告 artifact、导出大数据）。
+
+    向后兼容：旧 config 用 `interrupt_on: [tool1, tool2]` 这种 list 形式的也会被接受，
+    自动归到 medium_risk —— 因为旧配置语义是"敏感但默认可放行"，等同 medium。
+    新配置写 dict 形式即可启用分级 + 免确认白名单能力。
+    """
+    high_risk: list[str] = []
+    medium_risk: list[str] = []
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_legacy_list(cls, v):
+        # 旧形式：interrupt_on: [tool1, tool2]  →  全归 medium_risk
+        if isinstance(v, list):
+            return {"high_risk": [], "medium_risk": v}
+        return v
+
+    def all_intercepted(self) -> list[str]:
+        """所有被拦截的工具名（用于传给 deepagents middleware）。"""
+        return list(self.high_risk) + list(self.medium_risk)
+
+    def classify(self, tool_name: str) -> str:
+        """返回 'high' | 'medium' | 'none'。"""
+        if tool_name in self.high_risk:
+            return "high"
+        if tool_name in self.medium_risk:
+            return "medium"
+        return "none"
+
+
 class AgentConfig(BaseModel):
     max_iterations: int = 20
     timeout_seconds: int = 120
-    interrupt_on: list[str] = []
+    interrupt_on: InterruptConfig = InterruptConfig()
     long_context: LongContextConfig = LongContextConfig()
     subagents: list[SubAgentSpec] = []  # 主 Agent 可派工的子 Agent 列表
 
 
 class LLMConfig(BaseModel):
-    provider: str = "anthropic"
-    model: str = "claude-sonnet-4-6"
+    """LLM 配置——只走 OpenAI 兼容协议（ChatOpenAI）。
+
+    `provider` 字段保留兼容旧 config.yaml / .env，但**不再影响实际行为**——
+    所有调用都走 ChatOpenAI；切换不同后端用 `base_url`。
+    """
+    provider: str = "openai"
+    model: str = "gpt-4o-mini"
     api_key: str = ""
     base_url: str = ""
 
@@ -104,9 +146,9 @@ def load_config(path: str = "config.yaml") -> AppConfig:
             raw = yaml.safe_load(f) or {}
 
     raw["llm"] = {
-        "provider": os.getenv("LLM_PROVIDER", "anthropic"),
-        "model": os.getenv("LLM_MODEL", "claude-sonnet-4-6"),
-        "api_key": os.getenv("LLM_API_KEY", os.getenv("ANTHROPIC_API_KEY", "")),
+        "provider": os.getenv("LLM_PROVIDER", "openai"),
+        "model": os.getenv("LLM_MODEL", "gpt-4o-mini"),
+        "api_key": os.getenv("LLM_API_KEY", ""),
         "base_url": os.getenv("LLM_BASE_URL", ""),
     }
     return AppConfig(**raw)

@@ -206,7 +206,7 @@ ads_data_agent/
 │   ├── builder.py             build_agent 主装配
 │   ├── checkpointer.py        AsyncSqliteSaver lifecycle + Summarization 工厂 patch
 │   ├── store.py               AsyncSqliteStore lifecycle
-│   ├── llm.py                 _build_model（双协议路由）
+│   ├── llm.py                 _build_model（OpenAI 兼容协议，base_url 切后端）
 │   ├── config.py              Pydantic 配置 schemas
 │   ├── session.py             thread_id 生成
 │   ├── user_space.py          per-user 文件空间
