@@ -149,13 +149,13 @@ query-metrics --metrics "cvr,adGroupShallowConversionNumber" \
 
 ### search-dimension-values
 
-维度值不确定时用语义搜索找准。
+**用途有限**：仅当用户给的是**模糊词**、需要的是**精确值**时使用（如用户说"问界" → 找到精确值"问界M7"做 EQUAL 查询）。
 
 ```bash
 search-dimension-values --dimension "promotionTarget" --query "问界" --top-k 5
 ```
 
-**返回的 `value` 字段**直接用于 query-metrics 的 filters，**不要用 `value_desc`**：
+返回的 `value` 字段直接用于 filters，**不要用 `value_desc`**：
 
 ```json
 { "value": "问界M7", "value_desc": "问界M7车型", "similarity": 1 }
@@ -163,6 +163,20 @@ search-dimension-values --dimension "promotionTarget" --query "问界" --top-k 5
 
 ✅ `--filters "promotionTarget=问界M7"`
 ❌ `--filters "promotionTarget=问界M7车型"`
+
+#### 🚨 不要用 search 替代 LIKE/NOT LIKE 模式过滤
+
+用户描述包含"包含 / 不包含 / 以 X 开头 / 以 X 结尾"等**模式语义**时，**直接用模式运算符**，不要先 search-dimension-values 枚举所有匹配值再 IN/NOT IN。维度值可能成千上万，枚举必然漏数。
+
+| 用户描述 | ✅ 正确 | ❌ 错误 |
+|---|---|---|
+| 版位名称不带"非标" | `positionName=notlike:%非标%` | search 列出非标值再 NOT IN（漏） |
+| 任务名以"测试"开头 | `adGroupName=sw:测试` | 列出后 IN |
+| 包含"618"关键词 | `campaignName=like:%618%` | 同上 |
+| 排除测试 / 内测 / 灰度 | `campaignName=notlike:%测试%` 多个分号串联 | search 各种关键词后 NOT IN |
+| 非空 / 为空 | `xxx=notnull:` / `xxx=null:` | 列出所有非空值再 IN |
+
+**判断口诀**：用户给的是**关键词 / 模式** → 模式运算符。用户给的是**具体的值（不太确定写法）** → search 找精确值。
 
 ### list-metrics / list-dimensions
 
