@@ -84,31 +84,85 @@ def _get_encoder(model: str | None):
     精确数字以 LLM 厂商 usage_metadata 上报的 input_tokens 总数为准（metrics.input_tokens）。
 
     返回 None 时调用方走"无估算"分支（不给 breakdown）。
+
+    **诊断日志**：encoder 加载失败的原因以前是 silent except——前端 popover 显示
+    "breakdown 数据暂不可用" 但 log 里搜不到任何 tiktoken 相关线索，给排障带来困难。
+    现在每次首次加载（命中缓存的不打）的成功/失败都打 INFO/WARNING，方便定位
+    （典型场景：公司内网拦截 OpenAI BPE CDN，cl100k_base 下载失败）。
     """
     try:
         import tiktoken
     except ImportError:
+        logger.warning("tiktoken not installed; breakdown unavailable. pip install 'tiktoken>=0.7'")
         return None
     key = model or "__default__"
     if key in _ENCODER_CACHE:
         return _ENCODER_CACHE[key]
     enc = None
+    err_model = None
+    err_fallback = None
     if model:
         try:
             enc = tiktoken.encoding_for_model(model)
-        except Exception:
-            pass
+        except Exception as e:
+            err_model = e
     if enc is None:
         try:
             enc = tiktoken.get_encoding("cl100k_base")
-        except Exception:
+        except Exception as e:
+            err_fallback = e
             enc = None
     _ENCODER_CACHE[key] = enc
+    if enc is None:
+        logger.warning(
+            "tiktoken encoder load FAILED model=%s err_model=%s err_fallback=%s "
+            "(typical cause: corporate network blocking BPE download from OpenAI CDN — "
+            "warmup on internet-accessible machine then copy ~/.cache/tiktoken/ to here)",
+            model, err_model, err_fallback,
+        )
+    elif err_model is not None:
+        # encoding_for_model 失败但 cl100k fallback 成功——这是预期路径（非 OpenAI 模型）
+        logger.info("tiktoken: model=%s not in registry, using cl100k_base fallback (~5%% bias)", model)
+    else:
+        logger.info("tiktoken: model=%s encoder ready", model)
     return enc
 
 
+def _count_chars_as_tokens(text) -> int:
+    """字符粗估：CJK 1:1，其它字符 4:1（英文 1 token ≈ 4 字符）。
+
+    精度 ±30%，但比 0 数据好——用作 tiktoken 不可用时的兜底，让 breakdown 视化
+    不因为缺 BPE 词表而完全失效。CJK 范围覆盖中日韩主要 Unicode 块。
+    """
+    if not text:
+        return 0
+    if isinstance(text, list):
+        text = "".join(p.get("text", "") if isinstance(p, dict) else str(p) for p in text)
+    elif not isinstance(text, str):
+        text = str(text)
+    if not text:
+        return 0
+    cjk = 0
+    for c in text:
+        # CJK 统一汉字 + CJK 标点 + 全角符号 + 假名（这些跟英文 4:1 的规则不同）
+        if ('一' <= c <= '鿿' or
+            '　' <= c <= '〿' or
+            '＀' <= c <= '￯' or
+            '぀' <= c <= 'ゟ' or
+            '゠' <= c <= 'ヿ'):
+            cjk += 1
+    other = len(text) - cjk
+    return cjk + max(0, other) // 4 + (1 if other and other < 4 else 0)
+
+
 def _count_text(enc, text) -> int:
-    """安全计数：text 可能是 str / list（多模态）/ 其它，统一转 str 兜底。"""
+    """安全计数：text 可能是 str / list（多模态）/ 其它，统一转 str 兜底。
+
+    enc=None 时走字符粗估；enc.encode() 抛异常时也降级到字符粗估——总之不让
+    breakdown 计算因为单条 message 失败就整体崩溃。
+    """
+    if enc is None:
+        return _count_chars_as_tokens(text)
     if not text:
         return 0
     if isinstance(text, list):
@@ -121,8 +175,7 @@ def _count_text(enc, text) -> int:
     try:
         return len(enc.encode(text))
     except Exception:
-        # encoder 偶尔遇到特殊符号可能 raise，按字符数粗估（中文约 1 字符 ≈ 1 token）
-        return len(text)
+        return _count_chars_as_tokens(text)
 
 
 def _breakdown_input_tokens(messages, model: str | None) -> dict | None:
@@ -141,13 +194,15 @@ def _breakdown_input_tokens(messages, model: str | None) -> dict | None:
       - encoder 用 tiktoken cl100k_base 估算（多数厂商偏差 <5%），完全不一致时退化按
         字符数粗估。
 
-    返回 None 当 tiktoken 不可用 / messages 空 —— 前端按"无 breakdown"显示。
+    返回 None 当 messages 空。tiktoken 不可用时走字符粗估 fallback（±30% 精度）
+    保证 breakdown 视化不掉链子——结果带 method 字段标记，前端可据此调整 hover 文案。
     """
-    enc = _get_encoder(model)
-    if enc is None or not messages:
+    if not messages:
         return None
+    enc = _get_encoder(model)  # None = tiktoken 不可用，_count_text 自动走字符兜底
+    method = "tiktoken" if enc is not None else "char-estimate"
     # langgraph 给 batch（外层 list[list[BaseMessage]]）；通常 batch_size=1
-    if messages and isinstance(messages[0], list):
+    if isinstance(messages[0], list):
         messages = messages[0]
 
     # 找出"最后一条 HumanMessage"——它代表当前轮的新输入，单独算一桶
@@ -171,6 +226,7 @@ def _breakdown_input_tokens(messages, model: str | None) -> dict | None:
             # HumanMessage（非最后） + AIMessage —— 历史对话
             buckets["history"] += n
     buckets["estimated_total"] = sum(buckets.values())
+    buckets["method"] = method  # 'tiktoken'（±5%）或 'char-estimate'（±30%）—— 前端据此调 hover 文案
     return buckets
 
 

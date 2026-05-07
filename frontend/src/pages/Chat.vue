@@ -104,7 +104,7 @@
               </div>
               <div class="ctx-popover-divider"></div>
               <template v-if="contextSegments && contextSegments.length">
-                <div class="ctx-popover-section">各部分占用（tiktoken 估算 ±5%）</div>
+                <div class="ctx-popover-section">各部分占用（{{ breakdownMethodLabel }}）</div>
                 <div v-for="seg in contextSegments" :key="seg.key" class="ctx-popover-row">
                   <span :class="['ctx-popover-dot', `ctx-seg-${seg.key}`]"></span>
                   <span class="ctx-popover-label">{{ SEGMENT_LABELS[seg.key] }}</span>
@@ -347,6 +347,14 @@ const contextSegments = computed(() => {
       widthPct: ((m.breakdown[key] || 0) * 100 / trigger),
     }))
     .filter(s => s.tokens > 0)
+})
+
+// breakdown 估算方法标签：tiktoken 精确（±5%）/ 字符兜底（±30% 但不依赖网络）
+const breakdownMethodLabel = computed(() => {
+  const method = latestMetrics.value?.breakdown?.method
+  if (method === 'tiktoken') return 'tiktoken 估算 ±5%'
+  if (method === 'char-estimate') return '字符粗估 ±30%（tiktoken 不可用）'
+  return '估算'  // 老数据兼容
 })
 
 // 上下文 breakdown 自定义 popover 显示状态
