@@ -97,6 +97,41 @@ user-invocable: true
 | `package` | 包名格式（com.xxx.xxx） | 同 string，可 `like:` 模式过滤 |
 | `date` | 日期（day / reqDay） | `YYYY-MM-DD` 格式，搭配 `--time-mode` |
 
+## 漏斗类指标对比（容易选错）
+
+广告漏斗里"请求 → 返回 → 曝光 → 点击 → 转化"每段都有对应的指标，名字相似但口径不同。
+
+### 请求 / 返回类（次数 vs 个数）
+
+一次广告请求可包含多个广告 → "次数"是**请求事件数**，"个数"是**广告条数**。
+
+| 指标 | 含义 | 口径 |
+|---|---|---|
+| `adsRequestCount` / `adRequestPV` | 广告请求事件数 | 次数 |
+| `adRequestNumber` | 广告请求的广告条数 | 个数 |
+| `adRequestUV` | 去重用户数 | UV |
+| `adReturnCount` | 媒体返回事件数 | 次数 |
+| `mediaReceiveCount` | 媒体返回的广告条数 | 个数 |
+
+**所有「请求 / 返回」类指标都不支持 corpName / corpId 维度**——广告请求和广告主无关。
+list-metrics 输出的"不支持维度"列已标注；强行用会拿到错误数据。
+
+### 填充率 / 展示率（分母不同）
+
+| 指标 | 公式 | 用途 |
+|---|---|---|
+| `adFillRateCount` 填充率（次数） | 返回次数 / 请求次数 | 看请求级填充 |
+| `adFillRateNumber` 填充率（个数） | 返回个数 / 请求个数 | 看广告级填充 |
+| `adImpRateCount` 展示率（次数） | 应收曝光 / 返回次数 | 看返回 → 曝光的事件级转化 |
+| `adImpRateNumber` 展示率（个数） | 应收曝光 / 返回个数 | 看返回 → 曝光的广告级转化 |
+
+不确定该选次数还是个数：**默认用次数版**（`Count` 后缀），事件级口径最常见。
+
+### 转化类必须 request 时间口径
+
+`cvr` / `realityConversionCost` / `adGroupShallowConversionNumber` 等转化指标**必须**配
+`--time-mode request`——转化是从请求开始归因的，用 event 口径会算错。
+
 ## 维度组合粒度警示
 
 工具单次返回上限 1000 行，**高 cardinality 维度组合**会触发截断（结果不完整）。常见会爆的组合：
