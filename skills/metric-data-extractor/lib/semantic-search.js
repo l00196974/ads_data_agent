@@ -42,7 +42,12 @@ class SemanticSearch {
   }
 
   buildSearchText(row) {
-    return [row.value, row.value_desc].filter(Boolean).join(' ');
+    // value_aliases 是逗号分隔的别名串（如 "HUAWEI Browser,华为浏览器APP"），
+    // 拼进搜索文本让 lexical / 语义匹配都能命中别名——之前只搜 value+desc，
+    // 用户输入"AG"找"华为应用市场"会失败。
+    return [row.value, row.value_desc, row.value_aliases]
+      .filter(Boolean)
+      .join(' ');
   }
 
   lexicalScore(query, text) {
