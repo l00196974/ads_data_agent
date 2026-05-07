@@ -1,3 +1,6 @@
+from agent.config import load_config
+
+
 class SessionManager:
     def get_thread_id(self, user_id: str, conversation_id: str | None = None) -> str:
         """Build a langgraph thread_id.
@@ -12,7 +15,8 @@ class SessionManager:
         return user_id
 
     def get_config(self, user_id: str, conversation_id: str | None = None) -> dict:
+        # recursion_limit 从 config 读，支持运行时调；不再硬编码
         return {
             "configurable": {"thread_id": self.get_thread_id(user_id, conversation_id)},
-            "recursion_limit": 100,
+            "recursion_limit": load_config().agent.recursion_limit,
         }

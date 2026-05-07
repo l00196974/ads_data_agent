@@ -11,7 +11,7 @@ from deepagents import create_deep_agent
 from agent.checkpointer import get_checkpointer
 from agent.config import AppConfig, load_config
 from agent.llm import _build_model
-from agent.middleware import ToolOutputTruncationMiddleware
+from agent.middleware import IterationGuardMiddleware, ToolOutputTruncationMiddleware
 from agent.store import get_store
 
 
@@ -110,6 +110,8 @@ def build_agent(
             max_bytes=lc.tool_output_max_bytes,
             data_dir=cfg.persistence.data_dir,
         ),
+        # 步数感知：接近 recursion_limit 时往 messages 里注入 system 警告，让 LLM 自我收敛
+        IterationGuardMiddleware(recursion_limit=cfg.agent.recursion_limit),
     ]
 
     # 子 Agent 列表（独立 context window，主→子任务委派靠 deepagents 内置 task 工具）。

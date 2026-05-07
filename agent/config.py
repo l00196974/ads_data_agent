@@ -96,8 +96,12 @@ class InterruptConfig(BaseModel):
 
 
 class AgentConfig(BaseModel):
-    max_iterations: int = 20
+    max_iterations: int = 20  # legacy 字段，未被任何代码消费——保留以免破坏旧 config.yaml
     timeout_seconds: int = 120
+    # LangGraph recursion_limit：单轮对话的 graph step 上限（每个 LLM 调用 / 工具调用 ≈ 1 step）。
+    # 默认 150 覆盖大多数数据诊断场景（多维下钻 + 对比分析 + 人群画像 ≈ 50-80 steps）。
+    # 提到太高（>300）通常是死循环——遇到撞 limit 应当先看 messages 而不是无脑加大。
+    recursion_limit: int = 150
     interrupt_on: InterruptConfig = InterruptConfig()
     long_context: LongContextConfig = LongContextConfig()
     subagents: list[SubAgentSpec] = []  # 主 Agent 可派工的子 Agent 列表

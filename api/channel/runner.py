@@ -6,7 +6,7 @@ import time
 from datetime import datetime
 
 from langchain_core.messages import HumanMessage
-from langgraph.errors import GraphInterrupt
+from langgraph.errors import GraphInterrupt, GraphRecursionError
 from langgraph.types import Command
 
 from .base import BaseChannel
@@ -658,6 +658,21 @@ class AgentRunner:
             interrupts = e.args[0] if e.args else []
             iv = interrupts[0].value if interrupts else {}
             await _handle_interrupt(iv, channel, agent, config, cfg.agent.interrupt_on)
+        except GraphRecursionError as e:
+            # 撞了 recursion_limit——IterationGuardMiddleware 的软警告没拦住。可能是真死循环
+            # 也可能是问题超复杂。给用户看到具体次数 + 已有部分结果，不要直接抛 stack。
+            logger.warning(
+                "agent_run RECURSION_LIMIT thread=%s chat_model_calls=%d business_tools=%d limit=%d",
+                thread_id, chat_model_calls, business_tools_started, cfg.agent.recursion_limit,
+            )
+            await channel.send_token(
+                f"\n\n⚠️ **已达本轮工具调用上限**（约 {cfg.agent.recursion_limit // 2} 次）。"
+                f"实际调用：LLM {chat_model_calls} 次 / 工具 {business_tools_started} 次。"
+                f"\n\n模型未能在限内给出最终回答——通常意味着问题过于宽泛或数据不足。"
+                f"建议：(1) 缩小问题范围（明确时间窗口 / 限定指标 / 限定维度）；"
+                f"(2) 把复杂问题拆成多个简单问题分别问；"
+                f"(3) 在配置文件里调高 `agent.recursion_limit`（当前 {cfg.agent.recursion_limit}）。"
+            )
         except Exception as e:
             logger.exception("agent_run ERROR thread=%s err=%s", thread_id, e)
             await channel.send_token(f"\n[错误] {e}")
