@@ -1,0 +1,4 @@
+# tiktoken BPE 缓存：tiktoken 用 sha1(url) 作文件名，无后缀。这俩是二进制（任意
+# 字节流），git 不能做 CRLF 转换否则 checkout 会损坏 BPE 词表。
+vendor/tiktoken_cache/9b5ad71b2ce5302211f9c61530b329a4922fc6a4 binary
+vendor/tiktoken_cache/fb374d419588a4632f3f557e76b4b70aebbca790 binary

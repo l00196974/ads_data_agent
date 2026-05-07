@@ -1,5 +1,14 @@
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
+
+# tiktoken 离线 BPE 缓存：必须在 import tiktoken（间接经 langchain / runner.py）之前 set，
+# 否则 tiktoken 已经决定走默认 cache 路径（%TMP%/data-gym-cache）就来不及了。
+# 公司内网 / 离线环境拦 OpenAI BPE CDN 时，靠这个目录里的预下载文件保证 tiktoken 可用。
+os.environ.setdefault(
+    "TIKTOKEN_CACHE_DIR",
+    str(Path(__file__).parent / "vendor" / "tiktoken_cache"),
+)
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
