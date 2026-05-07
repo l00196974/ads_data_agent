@@ -73,7 +73,7 @@
               ⚡ {{ latestMetrics.tps.toFixed(1) }} t/s
             </span>
           </span>
-          <span v-if="latestMetrics.context_used_pct != null" class="metric-context"
+          <span v-if="latestMetrics && latestMetrics.context_used_pct != null" class="metric-context"
                 @mouseenter="ctxPopoverVisible = true"
                 @mouseleave="ctxPopoverVisible = false">
             <span class="ctx-label">🧠 上下文</span>
