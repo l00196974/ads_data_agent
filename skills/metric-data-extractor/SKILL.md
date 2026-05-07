@@ -13,7 +13,7 @@ user-invocable: true
 
 1. **禁止自创指标 / 公式**：用户问"ROI"等不在系统的指标，**先问用户"用哪个公式"**，不要自己定义。
 2. **必须英文 code**：`metrics` / `dimensions` / `filters` 的 key 都用英文 code（如 `click` 不是"点击量"，`promotionTarget` 不是"推广标的"）。不知道有哪些 code 时调 `list-metrics` / `list-dimensions`。
-3. **商业广告必须过滤**：用户问"流水 / 点击 / CPM / CVR" 等用于经营分析的指标时，必须加 `--filters "business_partnership=商业合作"`，否则会包含尾量 / 非商业数据。
+3. **商业广告必须过滤**：用户问"流水 / 点击 / CPM / CVR" 等用于经营分析的指标时，必须加 `--filters "business_partnership=in:商业合作,集团商业竞价结算"`，否则会包含尾量 / 非商业数据。`business_partnership` 5 个值里只有这两个算商业流水（其余三个 `华为集团 / 自运营 / 集团商业竞价不结算` 都不算）。
 4. **`day` 与 `reqDay` 不能混用**：
    - 事件时间 (`event`) → 用 `day`（虚拟标记，自动转 `timingDimension`）
    - 请求时间 (`request`) → 用 `reqDay`（真实 API 维度，系统自动注入）
@@ -65,6 +65,48 @@ user-invocable: true
 | `promotionType`（采买模式：竞价 / 合约 / 定价 / 分成） | 看**竞价 vs 合约**的对比 |
 
 **注意**：`priceType=CPM` 不等于"合约广告"——区分竞价 / 合约必须用 `promotionType`。
+
+## 推广侧 vs 媒体侧（容易混淆的维度组）
+
+广告业务里有两组容易混的维度：「广告主在推什么」（推广侧）vs「广告展示在哪里」（媒体侧）。
+选错维度直接拿不到对的数据。
+
+| 想分析什么 | 用哪个维度 |
+|---|---|
+| 广告主推什么业务（车型、保险产品、电商 APP） | `promotionTarget` |
+| 广告主推的 APP 名 / 包名（推广对象是 APP 时） | `promoteAppName` / `promoteAppPkg` |
+| 广告显示在哪个 APP（媒体侧） | `mediaAppName` / `packageName` |
+| 广告显示在哪个媒体品牌（如华为浏览器） | `mediaName` |
+| 广告主自己属于哪个行业（投广告的人） | `operatingIndustryLevel1NotConsistent` / `Level2` |
+| 广告投放在哪个行业的媒体（被投放的媒体行业） | `appFirstIndustryClass` / `appSecondIndustryClass` |
+
+**典型错例**：用户问「问界 APP 在哪些媒体投放最多」——
+- ❌ 用 `promoteAppName=问界汽车 --dimensions mediaAppName` 但传错维度成 `promoteAppName`
+- ✅ `--filters "promoteAppName=问界汽车" --dimensions "mediaName"`（**过滤推广侧 + 拆媒体侧**）
+
+## dimension_type 字段语义（list-dimensions 输出的"类型"列）
+
+每个维度的 type 决定查询习惯：
+
+| type | 含义 | 查询惯用法 |
+|---|---|---|
+| `enum` | 值固定枚举（如 priceType / adGroupStatus） | 直接传值，不用先 search |
+| `semi-enum` | 常见值有限但可扩展（如 mediaName / 行业类） | 不确定写法时先 `search-dimension-values`；常见值可直接传 |
+| `string` | 自由文本（任务名 / 广告主名 / 推广标的） | 不确定具体值时**必须** search 找精确值；模式匹配用 `like:` / `notlike:` |
+| `id` | 标识符（adGroupId / corpId 等） | 直接传精确值；分析建议改用对应 name 维度更可读 |
+| `package` | 包名格式（com.xxx.xxx） | 同 string，可 `like:` 模式过滤 |
+| `date` | 日期（day / reqDay） | `YYYY-MM-DD` 格式，搭配 `--time-mode` |
+
+## 维度组合粒度警示
+
+工具单次返回上限 1000 行，**高 cardinality 维度组合**会触发截断（结果不完整）。常见会爆的组合：
+
+- `slotId × day` / `slotName × day`（广告位 × 日历）—— slot 数百到数千
+- `adGroupId × day` 或 `adGroupName × day` —— 任务往往上千
+- `campaignId × day` —— 计划数也大
+- 任何带 `corpId` / `corpName` 的细维度组合
+
+**应对**：加 `--page-size 1000 --sort-by <核心指标> --sort-order desc`，配合**显式过滤**（如限定 corpName / 限定 mediaName）缩范围。看到返回里 `truncated: true` 必须缩窄条件重查。
 
 ---
 

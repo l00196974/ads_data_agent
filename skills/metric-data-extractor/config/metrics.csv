@@ -1,4 +1,4 @@
-metric_code,metric_name,metric_desc,category_level1,category_level2,supported_dimensions,metric_aliases,indicator_id,decimal_places
+﻿metric_code,metric_name,metric_desc,category_level1,category_level2,supported_dimensions,metric_aliases,indicator_id,decimal_places
 cost,流水,"指标定义：指广告主在平台内消耗的虚拟货币或真实货币总额。
 业务意义：衡量平台营收能力的核心指标，反映了广告主对平台的预算投入规模。",成本指标,指标定义：成本指标，是广告投放过程中的重要业务指标。 业务意义：用于衡量和评估广告投放效果，支持业务决策和优化分析。,"day,reqDay,reqHour,hour,promotionTarget,mediaName,positionName,priceType,adGroupName,adGroupStatus,corpName,mediaType,slotForm","广告主流水,流水，广告流水，广告收入",e2c14da875cf415bb683fd9f1d9b82cd,8
 click,点击量,指标定义：点击量，指用户对广告进行点击操作的总次数。 业务意义：衡量用户对广告的兴趣和互动程度，是转化漏斗的重要环节。,基础指标,点击相关,"day,reqDay,reqHour,hour,promotionTarget,mediaName,positionName,priceType,adGroupName,adGroupStatus,corpName,mediaType,slotForm","应收点击数,点击量",d1d0b0dde8254f27b67661a3811e8ef4,8

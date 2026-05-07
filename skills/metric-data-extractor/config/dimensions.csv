@@ -1,36 +1,36 @@
-dimension_code,dimension_name,dimension_desc,dimension_aliases,value_examples,dimension_type
-operatingIndustryLevel1NotConsistent,一级行业,广告主所属一级行业,一级运营行业,"汽车,保险,电商,教育,游戏,金融,等",semi-enum
-operatingIndustryLevel2NotConsistent,二级行业,广告主所属二级行业,二级运营行业,"新能源汽车,传统汽车,车险,寿险,等",semi-enum
-promotionTarget,推广标的,广告推广的具体内容,"推广标的,推广对象,标的","问界M7,元保保险,某电商APP(示例)",string
-positionName,版位名称,"版位指一组广告位的合集，对广告位打包售卖","版位名称,版位,position","信息流版位,搜索版位,开屏版位,详情页版位,等",semi-enum
-slotName,广告位名称,广告位指媒体上具体的广告展示位置,"广告位名称,广告位,slot","首页信息流,搜索结果页(示例)",string
-dspId,DSP ID,DSP ID，标识符类维度,"DSP_ID,dsp_id",1 （指华为DSP），2，3,id
-promoteAppName,推广应用名称,推广应用名称，如果广告主推广的是APP，则有推广应用名称，否则该维度可能为空,"推广应用名称,应用名称","问界汽车,元保保险(示例)",string
-positionId,版位id,版位id，标识符类维度,版位id,"position_001,position_002(格式:position_xxx)",id
-slotId,广告位id,广告位id，标识符类维度,广告位id,"slot_001,slot_002(格式:slot_xxx)",id
-priceType,计费方式,计费方式（出价策略），枚举类维度，值固定。注意：CPM计费方式可能是竞价或合约，区分竞价和合约请使用promotionType（采买模式）,"计费方式,计费类型,出价方式","CPC,CPM,CPA,oCPC,oCPM,CPT,CPD,CPI,CPS",enum
-adGroupName,任务名称,任务名称，自由文本类维度,"任务名称,任务,task_name","问界M7推广任务01,元保车险推广任务01(示例)",string
-mediaName,媒体名称,"媒体名称，半枚举类维度，常见值有限但可扩展。**重要**：华为浏览器在不同数据中可能显示为""华为浏览器""或""HUAWEI Browser""，查询时需要同时包含这两个值才能获取完整数据。","媒体名称,媒体,media","华为浏览器,HUAWEI Browser,华为视频,华为音乐,华为阅读,华为应用市场,等",semi-enum
-adGroupStatus,任务状态,任务状态，枚举类维度，值固定,"任务状态,状态","运行中,已暂停,已结束,待审核",enum
-corpId,广告主id,广告主id，标识符类维度,"广告主ID,广告主id","corp_001,corp_002(格式:corp_xxx)",id
-mediaType,媒体分类,媒体分类，半枚举类维度，常见值有限但可扩展,"媒体分类,媒体类型","视频,资讯,音乐,阅读,游戏,浏览器,应用市场,等",semi-enum
-slotForm,广告位展示形式,广告位展示形式，半枚举类维度，常见值有限但可扩展,"广告位展示形式,展示形式,广告形式","信息流,横幅,插屏,开屏,激励视频,等",semi-enum
-corpName,广告主名称,广告主名称，自由文本类维度,"广告主名称,广告主","问界汽车广告主,元保保险广告主(示例)",string
-adGroupId,任务ID,任务ID，标识符类维度,"任务ID,任务id","adgroup_001,adgroup_002(格式:adgroup_xxx)",id
-dspName,dsp名称,dsp名称，自由文本类维度,"DSP名称,dsp","DSP_A,DSP_B(示例)",string
-shallowEffectType,浅层转化目标,任务首要转化目标类型,"浅层转化目标,浅层目标，首要目标","下载,注册,表单提交,咨询,激活,等",semi-enum
-deepEffectType,深层转化目标,任务次要转化目标类型,"深层转化目标,深层目标，次要目标","付费,次留,购买,激活,关键行为,等",semi-enum
-reqDay,请求时间,指广告请求发生的日期,"请求时间,请求日期","2026-03-01,2026-03-08(格式:YYYY-MM-DD)",date
-algModeTag,算法模型,算法模型，半枚举类维度，常见值有限但可扩展,"算法模型,模型","oCPC,oCPM,智能出价,等",semi-enum
-appFirstIndustryClass,媒体所属一级行业,媒体所属一级行业，半枚举类维度，常见值有限但可扩展,媒体所属一级行业,"视频,资讯,音乐,阅读,游戏,等",semi-enum
-appSecondIndustryClass,媒体所属二级行业,媒体所属二级行业，半枚举类维度，常见值有限但可扩展,媒体所属二级行业,"短视频,长视频,新闻资讯,小说阅读,等",semi-enum
-sspName,ssp名称,ssp名称，自由文本类维度,"SSP名称,ssp","SSP_A,SSP_B(示例)",string
-campaignId,计划id,计划id，标识符类维度,"计划ID,计划id","campaign_001,campaign_002(格式:campaign_xxx)",id
-promoteAppPkg,推广应用包名,推广应用包名，应用包名类维度,"推广应用包名,应用包名","com.huawei.aito,com.example.app(格式:包名)",package
-mediaAppName,媒体应用名称,媒体应用名称，自由文本类维度,媒体应用名称,"华为浏览器,华为视频(示例)",string
-appSecondClassName,AG二级分类,AG二级分类，自由文本类维度,AG二级分类,AG二级分类示例,string
-packageName,包名,包名，应用包名类维度,"包名,应用包名","com.huawei.browser,com.huawei.himovie(格式:包名)",package
-day,天,广告事件实际发生日期，比如曝光发生的日期，点击发生的日期,"请求小时,小时",2026/1/1,string
-mediaAppSecondClass,二级媒体行业,二级媒体行业，半枚举类维度，常见值有限但可扩展,二级媒体行业,"短视频,长视频,新闻资讯,小说阅读,等",semi-enum
-promotionType,采买模式,采买模式（区分竞价和合约），枚举类维度，值固定。这是区分竞价广告和合约广告的核心维度。,"采买模式,采买方式,竞价,合约","竞价,合约,定价采买,分成",enum
-business_partnership,商业合作关系,描述广告主和广告平台之间的合作关系,合作关系,"商业合作,华为集团,自运营,集团商业竞价不结算,集团商业竞价结算",semi-enum
+﻿dimension_code,dimension_name,dimension_desc,dimension_aliases,value_examples,dimension_type
+operatingIndustryLevel1NotConsistent,广告主一级行业,"广告主所属的一级行业（广告主自填，未做标准化对齐）。**这是『谁在投广告』侧的行业**——要看『广告投放在哪个行业的媒体上』请用 appFirstIndustryClass。字段名后缀 NotConsistent 是外部接口固定命名，不影响使用。","广告主一级行业,广告主行业,一级行业,运营行业,一级运营行业","汽车,保险,电商,教育,游戏,金融 (示例)",semi-enum
+operatingIndustryLevel2NotConsistent,广告主二级行业,"广告主所属的二级行业（广告主自填，未做标准化对齐）。同 operatingIndustryLevel1NotConsistent，只是粒度更细。要看媒体侧二级行业请用 appSecondIndustryClass。字段名后缀 NotConsistent 是外部接口固定命名。","广告主二级行业,二级行业,二级运营行业","新能源汽车,传统汽车,车险,寿险 (示例)",semi-enum
+promotionTarget,推广标的,"广告主推广的具体业务对象（车型 / 保险产品 / 电商 APP 等）。**和 promoteAppName 区别**：promotionTarget 是『推什么业务』（如『问界M7』『元保保险』），promoteAppName 仅当推广对象是 APP 时才有值（如『问界汽车 APP』）。要分析广告主在推什么用这个。","推广标的,推广对象,标的","问界M7,元保保险,某电商APP (示例)",string
+positionName,版位名称,"版位是一组广告位的合集，对广告位**打包售卖**。比 slotName 粒度粗——一个版位下挂多个 slot。要看版位级聚合数据用这个，看具体广告位用 slotName。","版位名称,版位,position","信息流版位,搜索版位,开屏版位,详情页版位 (示例)",semi-enum
+slotName,广告位名称,"媒体上具体的广告展示位置（如『首页信息流』『搜索结果页右侧』）。**和 positionName 区别**：positionName 是版位（广告位的打包），slotName 是单个具体位置。粒度细，组合查询时容易触发 1000 行截断，建议加 page-size + sort-by 限制。","广告位名称,广告位,slot","首页信息流,搜索结果页 (示例)",string
+slotId,广告位id,"广告位的标识符。和 slotName 一一对应，建议查询时用 slotName 更直观；ID 类维度只在和外部系统对账时使用。",广告位id,"slot_001,slot_002 (格式 slot_xxx)",id
+positionId,版位id,"版位的标识符。和 positionName 一一对应，建议查询时用 positionName 更直观。",版位id,"position_001,position_002 (格式 position_xxx)",id
+dspId,DSP ID,"DSP（需求方平台）的标识符。1=华为DSP，其余为外部 DSP。","DSP ID,dsp","1 (华为DSP), 2, 3 (示例)",id
+dspName,DSP 名称,"DSP（需求方平台）的名称，自由文本。和 dspId 一一对应，分析时用 dspName 更可读。","DSP名称,dsp","DSP_A,DSP_B (示例)",string
+sspName,SSP 名称,"SSP（媒体供应方平台）的名称，自由文本。","SSP名称,ssp","SSP_A,SSP_B (示例)",string
+promoteAppName,推广应用名称,"广告主推广的 APP 名（如果推的不是 APP 就为空）。**和 mediaAppName 区别**：promoteAppName 是广告**推广侧**的 APP（如广告在推的『问界汽车 APP』），mediaAppName 是广告**展示侧**的 APP（如广告展示在『华为浏览器』里）。","推广应用名称,推广应用,推广APP,被推广的应用","问界汽车,元保保险 (示例)",string
+promoteAppPkg,推广应用包名,"广告主推广的 APP 包名。promoteAppName 的包名形式，二选一即可。要查媒体侧 APP 包名用 packageName。","推广应用包名,推广应用包,推广APP包名","com.huawei.aito,com.example.app (格式 com.xxx.xxx)",package
+mediaAppName,媒体应用名称,"广告投放展示所在的 APP 名（媒体侧）。**和 promoteAppName 区别**：mediaAppName 是『广告显示在哪个 APP』，promoteAppName 是『广告在推哪个 APP』。和 packageName 一一对应。","媒体应用名称,展示APP,广告投放的应用,媒体APP","华为浏览器,华为视频 (示例)",string
+packageName,媒体应用包名,"广告投放展示所在 APP 的包名（媒体侧）。和 mediaAppName 一一对应；分析时用 mediaAppName 更直观，要和外部系统对账时用 packageName。","媒体应用包名,展示APP包名,媒体APP包名,包名","com.huawei.browser,com.huawei.himovie (格式 com.xxx.xxx)",package
+mediaName,媒体名称,"媒体品牌名（如『华为浏览器』）。比 mediaAppName 粒度粗——一个媒体可能含多个 APP（华为浏览器有手机端 + Pad 端等）。**重要：脏数据兼容**——华为浏览器在数据里同时存在两个值『华为浏览器』和『HUAWEI Browser』，查询任何涉及华为浏览器的内容时**必须用 IN 同时包两值**：`mediaName=in:华为浏览器,HUAWEI Browser`，否则漏数。多媒体对比时这两值视作同一行汇总。","媒体名称,媒体,media","华为浏览器,HUAWEI Browser,华为视频,华为音乐,华为阅读,华为应用市场 (示例)",semi-enum
+mediaType,媒体分类,"媒体的大类（如『视频』『资讯』）。比 mediaName 更粗，用于跨媒体大类比较；具体某个媒体用 mediaName。","媒体分类,媒体类型","视频,资讯,音乐,阅读,游戏,浏览器,应用市场 (示例)",semi-enum
+appFirstIndustryClass,媒体一级行业,"媒体所属的一级行业。**这是『广告投放在哪个行业的媒体上』侧——要看『谁在投广告』侧用 operatingIndustryLevel1NotConsistent**。容易和广告主行业混，注意区分。","媒体一级行业,媒体所属一级行业,媒体行业","视频,资讯,音乐,阅读,游戏 (示例)",semi-enum
+appSecondIndustryClass,媒体二级行业,"媒体所属的二级行业。同 appFirstIndustryClass，只是粒度更细。要看广告主二级行业用 operatingIndustryLevel2NotConsistent。","媒体二级行业,媒体所属二级行业","短视频,长视频,新闻资讯,小说阅读 (示例)",semi-enum
+mediaAppSecondClass,媒体二级分类,"媒体的二级分类，按业务自定义而非行业划分。","媒体二级分类,二级媒体行业","短视频,长视频,新闻资讯,小说阅读 (示例)",semi-enum
+appSecondClassName,AG 二级分类,"AG（应用商店）应用的二级分类（自由文本）。仅当媒体侧 APP 来自应用商店时有值。","AG二级分类,应用二级分类","未提供示例 (业务方未给典型值)",string
+slotForm,广告位展示形式,"广告位的展示形式（如『信息流』『开屏』）。比 slotName 粒度粗，跨广告位看『展示形式效果对比』时用这个。","广告位展示形式,展示形式,广告形式","信息流,横幅,插屏,开屏,激励视频 (示例)",semi-enum
+priceType,计费方式,"计费方式 / 出价策略（CPC=按点击 / CPM=按千次曝光 / CPA=按行动 / oCPC=优化点击 等）。**注意**：CPM 既可能是竞价也可能是合约——区分竞价 vs 合约请用 promotionType（采买模式），不要靠 priceType 推断。","计费方式,计费类型,出价方式,出价策略","CPC,CPM,CPA,oCPC,oCPM,CPT,CPD,CPI,CPS",enum
+promotionType,采买模式,"广告的采买模式——**区分竞价广告和合约广告的核心维度**。竞价 = 实时竞价；合约 = 锁定库存定价采买；分成 = 按收入分成。和 priceType 不冲突，priceType 看出价方式，promotionType 看采买商业模式。","采买模式,采买方式,竞价合约,广告类型","竞价,合约,定价采买,分成",enum
+algModeTag,算法模型,"投放使用的算法模型 / 智能出价模式。",算法模型,"oCPC,oCPM,智能出价 (示例)",semi-enum
+shallowEffectType,浅层转化目标,"任务的首要转化目标类型（浅层转化）。和 deepEffectType 配对：浅层是漏斗前端，深层是漏斗后端。","浅层转化目标,浅层目标,首要转化目标","下载,注册,表单提交,咨询,激活 (示例)",semi-enum
+deepEffectType,深层转化目标,"任务的次要转化目标类型（深层转化）。和 shallowEffectType 配对，深层是更靠后的漏斗节点（付费、次留等）。","深层转化目标,深层目标,次要转化目标","付费,次留,购买,激活,关键行为 (示例)",semi-enum
+adGroupName,任务名称,"广告任务（adgroup）的名称，广告主自定义自由文本。常见用法：模式过滤排除测试任务（`adGroupName=notlike:%测试%`）。","任务名称,任务,adGroup","问界M7推广任务01,元保车险推广任务01 (示例)",string
+adGroupId,任务id,"广告任务的标识符。和 adGroupName 一一对应，分析时用 adGroupName 更直观。","任务id,任务ID","adgroup_001,adgroup_002 (格式 adgroup_xxx)",id
+adGroupStatus,任务状态,"任务的运行状态。",任务状态,"运行中,已暂停,已结束,待审核",enum
+campaignId,广告计划id,"广告计划（campaign）的标识符。Campaign 是 adGroup 的上一级——一个 campaign 含多个 adgroup。","广告计划id,计划id,campaign","campaign_001,campaign_002 (格式 campaign_xxx)",id
+corpName,广告主名称,"广告主公司名称，自由文本。常见用法：流水 Top N 广告主排名（`--dimensions corpName --sort-by cost`）。","广告主名称,广告主,corp","问界汽车广告主,元保保险广告主 (示例)",string
+corpId,广告主id,"广告主的标识符。和 corpName 一一对应，分析时用 corpName 更直观。","广告主id,corpId","corp_001,corp_002 (格式 corp_xxx)",id
+day,事件日期,"广告事件实际发生的日期（曝光 / 点击发生的那天）。和 reqDay 区别：day 看『事件何时发生』，reqDay 看『广告请求何时发起带来的归因』。**事件时间口径下的粒度标记**——查询时和 `--time-mode event` 配套用，系统自动转成 timingDimension。","事件日期,日期","2026-03-01,2026-03-08 (格式 YYYY-MM-DD)",date
+reqDay,请求日期,"广告请求发生的日期（用户向广告平台发起广告请求的那天）。和 day 区别：用户问『广告何时投放带来的归因 / 转化数 / CVR』时用 reqDay；用户问『曝光 / 点击何时发生』用 day。**请求时间口径**——和 `--time-mode request` 配套用。","请求日期,请求时间","2026-03-01,2026-03-08 (格式 YYYY-MM-DD)",date
+business_partnership,商业合作关系,"广告主和华为广告平台的合作关系类别。**商业广告分析硬约束**：用户问『流水 / 收入 / 商业 CPM / 商业 CVR』等指标时，**必须**加过滤 `business_partnership=in:商业合作,集团商业竞价结算`，否则会包含尾量 / 非商业数据导致结论错误。5 个 enum 值里只有这两个算商业流水，其余三个（华为集团、自运营、集团商业竞价不结算）不算。","商业合作关系,合作关系,商业属性","商业合作,集团商业竞价结算,集团商业竞价不结算,华为集团,自运营",semi-enum
