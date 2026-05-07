@@ -55,10 +55,20 @@ class WebSSEChannel(BaseChannel):
         data = json.dumps({"token": token}, ensure_ascii=False)
         await self._queue.put(f"event: token\ndata: {data}\n\n")
 
-    async def send_step(self, msg: str, step_type: str, subagent: str | None = None) -> None:
+    async def send_step(
+        self,
+        msg: str,
+        step_type: str,
+        subagent: str | None = None,
+        skill_subcmd: str | None = None,
+    ) -> None:
+        """skill_subcmd: 仅当工具是 run_command 时由 runner 解析出来传入——
+        前端用它在顶部 metrics 栏聚合"本轮调用的 skill 链"，省得自己再 parse msg。"""
         payload: dict = {"msg": msg, "type": step_type}
         if subagent:
             payload["subagent"] = subagent
+        if skill_subcmd:
+            payload["skill_subcmd"] = skill_subcmd
         self._persist_event("step", payload)
         data = json.dumps(payload, ensure_ascii=False)
         await self._queue.put(f"event: step\ndata: {data}\n\n")

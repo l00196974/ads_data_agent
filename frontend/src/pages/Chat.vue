@@ -52,6 +52,10 @@
                   :title="isStreaming ? '本轮已耗时（跑完后定格）' : '本轮总耗时（用户发问到 agent 完整回答）'">
               ⏱ {{ formatDuration(turnElapsedMs) }}
             </span>
+            <span v-if="turnSkills.length" class="metric-item metric-skills"
+                  :title="`本轮调用的 skill 子命令（按时序）：${turnSkills.join(' → ')}`">
+              🛠 {{ turnSkills.join(' → ') }}
+            </span>
           </span>
 
           <span v-if="latestMetrics" class="metric-divider-vert">|</span>
@@ -261,6 +265,12 @@ const turnTokens = ref({ input: 0, output: 0, calls: 0 })
 // 进入历史会话时从 backend metrics summary 初始化，metrics 事件持续追加。
 // 新对话 / 切到没历史的会话时归零。
 const sessionTokens = ref({ input: 0, output: 0, calls: 0 })
+
+// 本轮调用过的 skill 子命令列表（按调用时序，去重）。
+// 数据来源：SSE 'step' 事件 type=tool_start 时 backend 传 skill_subcmd 字段
+// （仅 run_command 工具传，task / write_file 等不传）。
+// 重置点：sendOrAppend 起点（新一轮）、selectConversation（切会话）。
+const turnSkills = ref([])
 
 // 本轮耗时计时器：sendOrAppend 起点 → done 事件终点。
 // 跑过程中每 200ms 更新一次 turnElapsedMs（视觉上秒数滚动），跑完定格在最终值。
@@ -477,6 +487,10 @@ async function sendOrAppend() {
         if (data.type === 'tool_start') {
           const indent = data.subagent ? '   ↳ ' : ''
           appendLog({ label: `${indent}${data.msg} 执行中...`, kind: 'running', subagent: data.subagent || null })
+          // backend 仅在 run_command 时传 skill_subcmd——按时序去重收集到本轮列表
+          if (data.skill_subcmd && !turnSkills.value.includes(data.skill_subcmd)) {
+            turnSkills.value.push(data.skill_subcmd)
+          }
         } else {
           const group = currentThinkingIdx.value !== null
             ? messages.value[currentThinkingIdx.value]
@@ -533,10 +547,11 @@ async function sendOrAppend() {
         progressText.value = data.message
       },
       metrics: (data) => {
-        // call_seq==1 = 该轮的第一次 LLM 调用 → turnTokens 归零（容错"本轮"边界）。
+        // call_seq==1 = 该轮的第一次 LLM 调用 → turnTokens / turnSkills 归零（容错"本轮"边界）。
         // sessionTokens 不归零——它跨多轮累计；只有 clearChat / 切新会话才清零。
         if (data.call_seq === 1) {
           turnTokens.value = { input: 0, output: 0, calls: 0 }
+          turnSkills.value = []
         }
         if (typeof data.input_tokens === 'number') {
           turnTokens.value.input += data.input_tokens
@@ -624,6 +639,7 @@ async function selectConversation(conv) {
   appendHint.value = false
   latestMetrics.value = null  // 顶部 metrics 栏复位
   turnTokens.value = { input: 0, output: 0, calls: 0 }
+  turnSkills.value = []
   // sessionTokens 从历史 metrics summary 初始化——切到老会话能立即看到累计数
   try {
     const r = await fetch(`/api/chat/${userId}/conversations/${conv.conversation_id}/metrics`)
@@ -747,6 +763,7 @@ function clearChat() {
   // metrics 栏复位——避免显示上一会话的脏数据
   latestMetrics.value = null
   turnTokens.value = { input: 0, output: 0, calls: 0 }
+  turnSkills.value = []
   sessionTokens.value = { input: 0, output: 0, calls: 0 }
   stopTurnTimer()
   turnElapsedMs.value = 0
@@ -960,6 +977,15 @@ function logout() {
   font-variant-numeric: tabular-nums;
   min-width: 48px;
   color: #595959;
+}
+.metric-skills {
+  /* 调用链：低对比度灰色，跟其他次要 metric 一致；超过 200px 截断防止挤压布局 */
+  color: #595959;
+  font-size: 11px;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .metric-model {
   background: rgba(199, 0, 11, 0.08);

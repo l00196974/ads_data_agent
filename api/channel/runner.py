@@ -599,7 +599,18 @@ class AgentRunner:
                     if not _is_meta_tool(tool_name):
                         business_tools_started += 1
                         step_msg = _format_tool_label(tool_name, input_data)
-                        await channel.send_step(step_msg, "tool_start", subagent=parent_subagent)
+                        # run_command 时把命令首 token（=skill 子命令名）单独传给前端，
+                        # 前端 metrics 栏聚合"本轮调用的 skill 链"靠这字段，不解析 msg
+                        skill_subcmd = None
+                        if tool_name == "run_command" and isinstance(input_data, dict):
+                            cmd = (input_data.get("command") or "").strip()
+                            if cmd:
+                                skill_subcmd = cmd.split(maxsplit=1)[0]
+                        await channel.send_step(
+                            step_msg, "tool_start",
+                            subagent=parent_subagent,
+                            skill_subcmd=skill_subcmd,
+                        )
                     if tool_name == "task" and isinstance(input_data, dict):
                         st = input_data.get("subagent_type")
                         if st:

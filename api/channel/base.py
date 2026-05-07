@@ -47,12 +47,22 @@ class BaseChannel(ABC):
         """LLM 流式 token 输出（由 AgentRunner 直接调用）"""
 
     @abstractmethod
-    async def send_step(self, msg: str, step_type: str, subagent: str | None = None) -> None:
+    async def send_step(
+        self,
+        msg: str,
+        step_type: str,
+        subagent: str | None = None,
+        skill_subcmd: str | None = None,
+    ) -> None:
         """工具执行步骤：tool_start / tool_end（显示在顶部步骤追踪区）
 
         subagent: 当工具在某个子 Agent 内部执行时传该子 Agent 的 name
             （如 "issue-diagnostician"）。主 Agent 直接调用时为 None。
             前端据此做嵌套展示，让用户看清"是谁在干这个活"。
+
+        skill_subcmd: 仅 run_command 工具调用时由 runner 解析出来传入——
+            如 "query-metrics"。前端在 metrics 栏聚合"本轮调用的 skill"列表，
+            其他工具（task / write_file / 框架内置）不传。
         """
 
     @abstractmethod

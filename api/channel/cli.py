@@ -5,9 +5,16 @@ class CLIChannel(BaseChannel):
     async def send_token(self, token: str) -> None:
         print(token, end="", flush=True)
 
-    async def send_step(self, msg: str, step_type: str, subagent: str | None = None) -> None:
+    async def send_step(
+        self,
+        msg: str,
+        step_type: str,
+        subagent: str | None = None,
+        skill_subcmd: str | None = None,
+    ) -> None:
         icon = "▶️  执行中" if step_type == "tool_start" else "✅ 完成"
-        # CLI 用缩进 + 子 Agent 名前缀展示嵌套
+        # CLI 用缩进 + 子 Agent 名前缀展示嵌套；skill_subcmd 在 CLI 不单独显示
+        # （msg 本身已含命令串），仅 web channel 需要这字段做 metrics 聚合
         if subagent:
             print(f"\n  ↳ [{subagent}] {icon}: {msg}")
         else:
