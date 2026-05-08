@@ -333,7 +333,9 @@ class AgentLoop:
                 )
             except Exception as e:
                 logger.exception("LLM call failed at step=%d", step)
-                yield {"type": "error", "exception": e}
+                # final_messages 暴露给 caller 持久化——含 user message + 已执行工具结果，
+                # 即使 LLM 失败也别丢上下文（下次 resume 还能看到已查到的数据）
+                yield {"type": "error", "exception": e, "final_messages": list(state.messages)}
                 return
 
             # 消费流，转发 token 事件，攒最后的 ai_message + tool_calls
@@ -352,7 +354,13 @@ class AgentLoop:
 
             # 没工具调用 = LLM 给最终答案了
             if not tool_calls:
-                yield {"type": "complete", "final_message": ai_msg}
+                # final_messages: 完整的本轮 messages 列表（含 system reminder /
+                # user / 多轮 ai+tool / 最后 ai）。caller 拿这个落库或回填上下文。
+                yield {
+                    "type": "complete",
+                    "final_message": ai_msg,
+                    "final_messages": list(state.messages),
+                }
                 return
 
             # HitL 拦截：列表里任一工具命中 interrupt_tools 就触发 callback
@@ -391,4 +399,8 @@ class AgentLoop:
                 }
 
         # 撞到 recursion_limit
-        yield {"type": "recursion_limit", "iters": self.config.recursion_limit}
+        yield {
+            "type": "recursion_limit",
+            "iters": self.config.recursion_limit,
+            "final_messages": list(state.messages),
+        }

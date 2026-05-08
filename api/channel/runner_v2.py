@@ -92,14 +92,11 @@ class AgentRunnerV2:
                 )
             return approve
 
-        # 累积本轮所有 messages（complete 时一并写库）
-        final_state_messages: list[BaseMessage] = list(initial_messages)
-        # 保存 user 输入；loop 内部也会 append 但我们这边算完整快照
-        from langchain_core.messages import HumanMessage
-        final_state_messages.append(HumanMessage(content=user_message))
+        # final_messages 由 loop 在 complete/recursion_limit/error 三个出口带上来
+        # （含 user / system-reminder / 多轮 ai+tool）。runner 拿这个直接落库，
+        # 不用自己拼装顺序。
+        final_messages_from_loop: list[BaseMessage] | None = None
 
-        # loop 跑下来收集 ai_message + tool_messages 顺序
-        # 但 loop 是 async generator——我们一边消费一边映射 channel 事件
         chat_call_seq = 0
         latest_usage: dict[str, Any] = {}
         latest_ai_message: AIMessage | None = None
@@ -152,6 +149,7 @@ class AgentRunnerV2:
                                 ev.get("approved"), thread_id)
                 elif ev_type == "complete":
                     latest_ai_message = ev["final_message"]
+                    final_messages_from_loop = ev.get("final_messages")
                     # 不发额外事件——token 已流完
                     break
                 elif ev_type == "recursion_limit":
@@ -159,24 +157,24 @@ class AgentRunnerV2:
                         f"\n\n⚠️ **已达本轮工具调用上限**（约 {loop_config.recursion_limit // 2} 次）。"
                         f"建议：缩小问题范围 / 拆成多个简单问题 / 调高 agent.recursion_limit。"
                     )
+                    final_messages_from_loop = ev.get("final_messages")
                     break
                 elif ev_type == "error":
                     await channel.send_token(f"\n[错误] {ev['exception']}")
+                    final_messages_from_loop = ev.get("final_messages")
                     break
         finally:
-            # save 不管成功失败——本轮 messages 都落库（含 LLM 调用前的 user message
-            # + 实际跑的 ai_message + tool_messages）。loop 内部维护 state.messages
-            # 但 generator 跑完后我们没法直接拿 final state；用最后一个 ai_message
-            # 简化保留——下次 load 时会带上之前所有持久化消息。
+            # 持久化策略：loop 在 complete/recursion_limit/error 三个出口都吐
+            # final_messages 完整快照（含 user / system-reminder / 多轮 ai+tool）。
+            # 这里走 overwrite_messages 而不是 append——因为 final_messages 包含的
+            # 是「load 出来的历史 + 本轮 + middleware 注入的 reminder」整段，append
+            # 会跟历史已存的 messages 重复。
             #
-            # P3 期间 ThreadStore 的角色是 append-only，loop 的 state 是单次跑的快照——
-            # 持久化"第一手 user message + 最后 ai_message"已能让下一轮 load 出连续历史。
-            # tool_messages 也保留（紧跟 ai_message 在 messages 列表里）——但因为本骨架
-            # 没拿到 loop 内部完整 state，这里**最低保真**：只 save user + 最后 ai。
-            # P3d 优化：让 loop 暴露 final_state hook，把完整 state.messages 传出来。
-            if latest_ai_message is not None:
-                final_state_messages.append(latest_ai_message)
-            try:
-                await self.store.save_messages(thread_id, final_state_messages)
-            except Exception as e:
-                logger.warning("ThreadStore.save_messages failed thread=%s: %s", thread_id, e)
+            # 注意：DateReminder 注入的 <system-reminder> 也会进 final_messages——
+            # 我们故意保留落库（让下次 load 看到上轮的 reminder marker），下轮
+            # DateReminder 会按 marker 删掉换最新。这样不会无限堆积。
+            if final_messages_from_loop is not None:
+                try:
+                    await self.store.overwrite_messages(thread_id, final_messages_from_loop)
+                except Exception as e:
+                    logger.warning("ThreadStore.overwrite_messages failed thread=%s: %s", thread_id, e)

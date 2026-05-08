@@ -286,6 +286,47 @@ async def test_recursion_limit_yields_warning_token(store):
 
 
 @pytest.mark.asyncio
+async def test_tool_messages_persisted_to_thread_store(store):
+    """工具调用产生的 ToolMessage 也要落库（之前 P3c 骨架只 save user+final ai 是 bug）。"""
+    call1 = [
+        _mk_chunk(tool_calls=[_mk_tc_delta(index=0, id="c1", name="my_tool", arguments='{"x":1}')]),
+        _mk_chunk(finish_reason="tool_calls"),
+    ]
+    call2 = [
+        _mk_chunk(content="完成"),
+        _mk_chunk(finish_reason="stop"),
+    ]
+    fake_client = _make_fake_openai_client([call1, call2])
+
+    async def my_tool(args):
+        return f"tool got x={args['x']}"
+
+    tool = ToolSpec(name="my_tool", func=my_tool, schema={"name": "my_tool", "parameters": {}})
+    config = AgentConfig(model="test", system_prompt="sys", recursion_limit=5)
+
+    from agent.loop import AgentLoop
+    from langchain_core.messages import ToolMessage
+    orig = AgentLoop._get_client
+    AgentLoop._get_client = lambda self: fake_client
+    try:
+        runner = AgentRunnerV2(store)
+        ch = _FakeChannel()
+        await runner.run(
+            channel=ch, thread_id="tm_t",
+            user_message="跑工具",
+            loop_config=config, tools=[tool], middlewares=[],
+        )
+
+        loaded = await store.load_messages("tm_t")
+        # 必须含 ToolMessage（之前 P3c 骨架版本会漏）
+        tool_messages = [m for m in loaded if isinstance(m, ToolMessage)]
+        assert len(tool_messages) == 1, f"ToolMessage 没落库: loaded={[type(m).__name__ for m in loaded]}"
+        assert "tool got x=1" in tool_messages[0].content
+    finally:
+        AgentLoop._get_client = orig
+
+
+@pytest.mark.asyncio
 async def test_history_loaded_across_runs(store):
     """跑完一轮 → 第二次 run 能拿到上轮 history（thread persistence 验证）。"""
     chunks_round1 = [

@@ -499,3 +499,87 @@ async def test_token_streaming_yields_each_delta():
             tokens.append(ev["delta"])
 
     assert tokens == ["你", "好", "！"]
+
+
+@pytest.mark.asyncio
+async def test_complete_event_carries_final_messages():
+    """complete 事件必须带 final_messages 完整列表（含 user + ai + tool）。"""
+    call1 = [
+        _make_chunk(tool_calls=[_make_tc_delta(index=0, id="c1", name="my_tool", arguments='{}')]),
+        _make_chunk(finish_reason="tool_calls"),
+    ]
+    call2 = [
+        _make_chunk(content="搞定"),
+        _make_chunk(finish_reason="stop"),
+    ]
+    client = _make_fake_client([call1, call2])
+
+    async def my_tool(args):
+        return "tool result"
+
+    tool = ToolSpec(name="my_tool", func=my_tool, schema={"name": "my_tool", "parameters": {}})
+    loop = _make_loop(tools=[tool], fake_client=client)
+
+    complete_ev = None
+    async for ev in loop.run("hi"):
+        if ev["type"] == "complete":
+            complete_ev = ev
+
+    assert complete_ev is not None
+    final_messages = complete_ev["final_messages"]
+    # 期望: [user, ai_with_tool_call, tool_result, final_ai]
+    assert len(final_messages) == 4
+    classes = [type(m).__name__ for m in final_messages]
+    assert classes == ["HumanMessage", "AIMessage", "ToolMessage", "AIMessage"]
+    assert final_messages[0].content == "hi"
+    assert final_messages[2].content == "tool result"
+    assert final_messages[3].content == "搞定"
+
+
+@pytest.mark.asyncio
+async def test_recursion_limit_event_carries_final_messages():
+    """recursion_limit 事件也带 final_messages（即使没收敛，已查到的数据要保留）。"""
+    perpetual_chunks = [
+        _make_chunk(tool_calls=[_make_tc_delta(index=0, id="loop", name="noop", arguments="{}")]),
+        _make_chunk(finish_reason="tool_calls"),
+    ]
+    client = _make_fake_client([perpetual_chunks] * 5)
+
+    async def noop(args):
+        return "x"
+
+    tool = ToolSpec(name="noop", func=noop, schema={"name": "noop", "parameters": {}})
+    loop = _make_loop(tools=[tool], recursion_limit=2, fake_client=client)
+
+    last_ev = None
+    async for ev in loop.run("loop"):
+        last_ev = ev
+
+    assert last_ev["type"] == "recursion_limit"
+    assert "final_messages" in last_ev
+    assert len(last_ev["final_messages"]) > 0
+
+
+@pytest.mark.asyncio
+async def test_error_event_carries_final_messages():
+    """LLM API 异常时 error 事件也要带 final_messages（保留 user 输入不丢）。"""
+    client = MagicMock()
+    client.chat = MagicMock()
+
+    async def fail(**kwargs):
+        raise RuntimeError("network down")
+
+    client.chat.completions = MagicMock()
+    client.chat.completions.create = fail
+
+    loop = _make_loop(fake_client=client)
+
+    error_ev = None
+    async for ev in loop.run("hi"):
+        if ev["type"] == "error":
+            error_ev = ev
+
+    assert error_ev is not None
+    assert "final_messages" in error_ev
+    # 至少含 user message
+    assert any(getattr(m, "content", "") == "hi" for m in error_ev["final_messages"])
