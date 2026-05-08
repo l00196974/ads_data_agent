@@ -327,6 +327,52 @@ async def test_tool_messages_persisted_to_thread_store(store):
 
 
 @pytest.mark.asyncio
+async def test_hitl_passes_risk_level_from_interrupt_tools(store):
+    """interrupt_tools[name].risk 应该按工具分级传给 channel.wait_for_confirm。"""
+    call1 = [
+        _mk_chunk(tool_calls=[_mk_tc_delta(index=0, id="c1", name="kill_db", arguments='{}')]),
+        _mk_chunk(finish_reason="tool_calls"),
+    ]
+    call2 = [
+        _mk_chunk(content="拒绝执行"),
+        _mk_chunk(finish_reason="stop"),
+    ]
+    fake_client = _make_fake_openai_client([call1, call2])
+
+    async def kill_db(args):
+        return "should not reach"
+
+    tool = ToolSpec(name="kill_db", func=kill_db, schema={"name": "kill_db", "parameters": {}})
+    config = AgentConfig(
+        model="test", system_prompt="sys", recursion_limit=5,
+        interrupt_tools={"kill_db": {"risk": "high"}},  # 标 high 风险
+    )
+
+    captured_risk = []
+
+    class _RecordingChannel(_FakeChannel):
+        async def wait_for_confirm(self, message, preview, *, tool_name="", risk_level="medium"):
+            captured_risk.append(risk_level)
+            return False, False  # reject
+
+    from agent.loop import AgentLoop
+    orig = AgentLoop._get_client
+    AgentLoop._get_client = lambda self: fake_client
+    try:
+        runner = AgentRunnerV2(store)
+        ch = _RecordingChannel()
+        await runner.run(
+            channel=ch, thread_id="hitl_t",
+            user_message="kill",
+            loop_config=config, tools=[tool], middlewares=[],
+        )
+        # interrupt_tools 标了 high → channel 收到 high
+        assert captured_risk == ["high"]
+    finally:
+        AgentLoop._get_client = orig
+
+
+@pytest.mark.asyncio
 async def test_history_loaded_across_runs(store):
     """跑完一轮 → 第二次 run 能拿到上轮 history（thread persistence 验证）。"""
     chunks_round1 = [

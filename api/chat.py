@@ -417,9 +417,16 @@ async def append_message(user_id: str, req: AppendRequest):
     conversation_meta.upsert(user_id, req.conversation_id, req.message)
 
     # 3. 在同 channel/thread 上启动新一轮——LLM 看完整历史 + 新追问
-    new_task = asyncio.create_task(
-        agent_runner.run(active["channel"], req.message, active["build_fn"], active["config"])
-    )
+    # 区分 v1/v2：v2 没有 build_fn/langgraph config 概念，重新装配 loop 即可；
+    # v1 复用之前装好的 build_fn + config（cancel 不影响 _active_runs 字段）
+    if active.get("runner_mode") == "v2":
+        new_task = await _start_v2_agent_run(
+            active["channel"], user_id, req.conversation_id, req.message,
+        )
+    else:
+        new_task = asyncio.create_task(
+            agent_runner.run(active["channel"], req.message, active["build_fn"], active["config"])
+        )
     active["task"] = new_task
     _register_active_task(req.conversation_id, new_task)
 

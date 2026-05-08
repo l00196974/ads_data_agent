@@ -76,7 +76,13 @@ class AgentRunnerV2:
                 {"tool_name": tc.name, "args": tc.args, "tool_call_id": tc.id}
                 for tc in tool_calls
             ]
-            risk_level = "high"  # 当前简化：拦截到的都按 high 处理；P3d 接精细分级
+            # HitL 精细分级：从 loop_config.interrupt_tools 拿每个工具的 risk
+            # 多工具一轮 emit 时取最高级（任一 high 整批按 high 处理）
+            risks = [
+                loop_config.interrupt_tools.get(tc.name, {}).get("risk", "medium")
+                for tc in tool_calls
+            ]
+            risk_level = "high" if "high" in risks else "medium"
             tool_name_label = ", ".join(tc.name for tc in tool_calls)
             try:
                 approve, _remember = await channel.wait_for_confirm(
