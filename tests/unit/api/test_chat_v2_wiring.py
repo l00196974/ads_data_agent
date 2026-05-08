@@ -7,7 +7,7 @@
   4. v2 task 跑完 ThreadStore 里能看到本轮 messages
 
 不验证 chat() 完整 endpoint 流程（那是集成测试，HTTP 层）——只验证 v2 装配代码
-正确把 cfg / SkillsPackage / middleware_loop 串到 AgentRunnerV2。
+正确把 cfg / SkillsPackage / middleware 串到 AgentRunnerV2。
 """
 import asyncio
 import shutil

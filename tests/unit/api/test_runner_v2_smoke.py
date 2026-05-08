@@ -1,6 +1,6 @@
 """runner_v2 端到端冒烟测试。
 
-证明 agent.loop + agent.state + middleware_loop 串成的新链路能跑通：
+证明 agent.loop + agent.state + middleware 串成的新链路能跑通：
   1. 简单 chat：用户问问题 → LLM 出最终答案 → channel 收到 token + metrics
   2. 工具调用 + DateReminder middleware：用户问问题 → DateReminder 注入日期 →
      LLM emit tool_call → 工具执行 → LLM 看结果出最终答案
@@ -16,8 +16,8 @@ import pytest_asyncio
 from langchain_core.messages import AIMessage, HumanMessage
 
 from agent.loop import AgentConfig, ToolSpec
-from agent.middleware_loop import DateReminder
-from agent.middleware_loop.date_reminder import _REMINDER_MARKER
+from agent.middleware import DateReminder
+from agent.middleware.date_reminder import _REMINDER_MARKER
 from agent.state import ThreadStore
 from api.channel.runner_v2 import AgentRunnerV2
 

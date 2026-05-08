@@ -1,9 +1,13 @@
-from agent.config import load_config
+"""Session helpers for agent.loop / ThreadStore（去 framework 后简化）。
+
+历史 get_config() 是给 langgraph thread/recursion_limit 用的——P4b 删除框架
+后不再需要那种 dict。保留 get_thread_id() 给 ThreadStore + middleware 寻址。
+"""
 
 
 class SessionManager:
     def get_thread_id(self, user_id: str, conversation_id: str | None = None) -> str:
-        """Build a langgraph thread_id.
+        """Build thread_id for ThreadStore + middleware addressing.
 
         - With `conversation_id`: `"{user_id}_{conversation_id}"` — isolates
           per-conversation history so a single user's clicks of "新对话"
@@ -13,10 +17,3 @@ class SessionManager:
         if conversation_id:
             return f"{user_id}_{conversation_id}"
         return user_id
-
-    def get_config(self, user_id: str, conversation_id: str | None = None) -> dict:
-        # recursion_limit 从 config 读，支持运行时调；不再硬编码
-        return {
-            "configurable": {"thread_id": self.get_thread_id(user_id, conversation_id)},
-            "recursion_limit": load_config().agent.recursion_limit,
-        }

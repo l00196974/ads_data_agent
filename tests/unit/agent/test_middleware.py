@@ -1,4 +1,4 @@
-"""middleware_loop 三套 middleware 的契约测试。
+"""middleware 三套 middleware 的契约测试。
 
 跟老 langgraph 版本的测试结构等价，差异：
   - 调用签名 `before_model(state)` 不带 runtime
@@ -19,12 +19,12 @@ from langchain_core.messages import (
 )
 
 from agent.loop import AgentState
-from agent.middleware_loop import (
+from agent.middleware import (
     DateReminder,
     IterationGuard,
     ToolOutputTruncation,
 )
-from agent.middleware_loop.date_reminder import _REMINDER_MARKER, _build_today_reminder
+from agent.middleware.date_reminder import _REMINDER_MARKER, _build_today_reminder
 
 
 # ============================================================

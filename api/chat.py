@@ -6,16 +6,13 @@ from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
 from agent import auto_approve, conversation_events, conversation_meta, conversation_metrics
-from agent.checkpointer import get_checkpointer
 from agent.config import load_config
-from agent.core import build_agent
 from agent.session import SessionManager
 from agent.skill_loader import load_md_skills
 from agent.user_space import UserSpace
 from api.channel import (
     ExternallyConfirmable,
     WebSSEChannel,
-    agent_runner,
     channel_registry,
 )
 from api.models import (
@@ -132,46 +129,7 @@ PLAN_INSTRUCTION = """## 执行流程（严格遵守）
 # 每轮注入 <system-reminder> 到 messages 头部
 
 
-def _make_build_fn(user_id: str):
-    us = UserSpace(user_id, cfg.persistence.data_dir)
-    # 把 user_id + artifacts_root 传给 skill_loader——run_command 内部为每次工具调用
-    # 显式构造 subprocess env（含 ADS_AGENT_ARTIFACT_DIR / ARTIFACT_ID / USER_ID）。
-    # 不能依赖 runner 在 on_tool_start 设 os.environ：langchain 用 create_task 派发 tool
-    # 协程，env 写入与 subprocess 启动有 race，会导致 skill 拿到错的 env（或上次的 env）。
-    md_pkg = load_md_skills(
-        cfg.skills.md_dir,
-        us.skills_dir,
-        user_id=user_id,
-        artifacts_root=us.artifacts_dir,
-    )
-
-    # **system_prompt 必须 100% 跨天稳定**——OpenAI 兼容 LLM（DeepSeek/Qwen 等）走自动
-    # 前缀匹配 cache，第一字节变化即整段失效。当前日期由 DateReminderMiddleware 每轮
-    # model 调用前以 <system-reminder> 形式注入到 messages 头部，**不**进入 system_prompt。
-    parts = [
-        PLAN_INSTRUCTION,         # 执行流程（几乎从不变）
-        us.get_agents_md(),        # system_agent.md 项目级 + 用户 agents.md
-    ]
-    if md_pkg.prompt_addition:
-        parts.append(md_pkg.prompt_addition)  # SKILL.md 业务工具描述
-    system_prompt = "\n\n".join(parts)
-
-    def _build(extra_tools=None):
-        # 业务工具集 = SKILL.md 加载出的 run_command 通用工具（如果有 skill 包）
-        skills = list(md_pkg.tools)
-        return build_agent(
-            user_id=user_id,
-            system_prompt=system_prompt,
-            skills=skills,
-            interrupt_on=cfg.agent.interrupt_on,
-            cfg=cfg,
-            extra_tools=extra_tools,
-        )
-
-    return _build
-
-
-# v2 ThreadStore 单例——AgentRunnerV2 期望复用 store connection（aiosqlite + WAL）。
+# ThreadStore 单例——AgentRunnerV2 期望复用 store connection（aiosqlite + WAL）。
 # 第一次需要 v2 时 lazy init，进程内全局共享。chat 多并发也线程安全（aiosqlite
 # 内部串行化写入）。
 _v2_store_cache: dict[str, "object"] = {}
@@ -189,16 +147,16 @@ async def _get_v2_store():
 
 
 async def _start_v2_agent_run(channel, user_id: str, conversation_id: str, message: str) -> asyncio.Task:
-    """装配 v2 链路 + 起 task。
+    """装配 agent loop 链路 + 起 task。
 
-    跟 v1 路径（agent_runner.run + langgraph）的差异：
-    - 不走 deepagents.create_deep_agent；用 agent.loop.AgentLoop 直调
-    - 状态持久化用 agent.state.ThreadStore（loop_messages 表），不用 AsyncSqliteSaver
-    - middleware 用 agent.middleware_loop（DateReminder/IterationGuard/ToolOutputTruncation）
-    - skill 工具走 SkillsPackage.loop_tools（ToolSpec 格式）
+    架构（P4b 完成后唯一链路）：
+    - agent.loop.AgentLoop（直调 openai SDK，不走 langchain_openai 包装）
+    - agent.state.ThreadStore（loop_messages 表持久化）
+    - agent.middleware（DateReminder/IterationGuard/ToolOutputTruncation）
+    - SkillsPackage.loop_tools（ToolSpec 格式，run_command 派发 SKILL.md 子命令）
     """
     from agent.loop import AgentConfig as LoopConfig
-    from agent.middleware_loop import DateReminder, IterationGuard, ToolOutputTruncation
+    from agent.middleware import DateReminder, IterationGuard, ToolOutputTruncation
     from api.channel.runner_v2 import AgentRunnerV2
 
     us = UserSpace(user_id, cfg.persistence.data_dir)
@@ -279,33 +237,13 @@ async def chat(user_id: str, req: ChatRequest):
     # 后续 → UPDATE last_active_at + message_count++（同时清归档状态）。
     conversation_meta.upsert(user_id, conversation_id, req.message)
 
-    # v1 / v2 runner 选择——cfg.agent.runner_mode（默认 v1，走 deepagents/langgraph）
-    if cfg.agent.runner_mode == "v2":
-        # 新链路：agent.loop + agent.state + agent.middleware_loop
-        task = await _start_v2_agent_run(channel, user_id, conversation_id, req.message)
-        # _active_runs 字段保留 build_fn / config 是为 v1 append 路径用的；v2 path
-        # 暂不支持 append（追问），先用 None 占位，append endpoint 会按 None 走 v2 重新装配
-        _active_runs[conversation_id] = {
-            "task": task,
-            "channel": channel,
-            "build_fn": None,
-            "config": None,
-            "session_id": session_id,
-            "runner_mode": "v2",
-        }
-    else:
-        # 老链路：deepagents + langgraph
-        build_fn = _make_build_fn(user_id)
-        config = session_mgr.get_config(user_id, conversation_id)
-        task = asyncio.create_task(agent_runner.run(channel, req.message, build_fn, config))
-        _active_runs[conversation_id] = {
-            "task": task,
-            "channel": channel,
-            "build_fn": build_fn,
-            "config": config,
-            "session_id": session_id,
-            "runner_mode": "v1",
-        }
+    # 启动 v2 链路：agent.loop + agent.state + agent.middleware（P4b 已删 v1）
+    task = await _start_v2_agent_run(channel, user_id, conversation_id, req.message)
+    _active_runs[conversation_id] = {
+        "task": task,
+        "channel": channel,
+        "session_id": session_id,
+    }
     _register_active_task(conversation_id, task)
 
     async def event_generator():
@@ -417,16 +355,9 @@ async def append_message(user_id: str, req: AppendRequest):
     conversation_meta.upsert(user_id, req.conversation_id, req.message)
 
     # 3. 在同 channel/thread 上启动新一轮——LLM 看完整历史 + 新追问
-    # 区分 v1/v2：v2 没有 build_fn/langgraph config 概念，重新装配 loop 即可；
-    # v1 复用之前装好的 build_fn + config（cancel 不影响 _active_runs 字段）
-    if active.get("runner_mode") == "v2":
-        new_task = await _start_v2_agent_run(
-            active["channel"], user_id, req.conversation_id, req.message,
-        )
-    else:
-        new_task = asyncio.create_task(
-            agent_runner.run(active["channel"], req.message, active["build_fn"], active["config"])
-        )
+    new_task = await _start_v2_agent_run(
+        active["channel"], user_id, req.conversation_id, req.message,
+    )
     active["task"] = new_task
     _register_active_task(req.conversation_id, new_task)
 
@@ -481,29 +412,29 @@ async def get_conversation_messages(user_id: str, conversation_id: str):
     `events`: 按时间顺序的 step / artifact_updated 事件，每条带 turn_id。
         前端按 turn_id 把事件分组，再插到对应的 user/ai 消息对之间渲染思考分组。
 
-    返回空数组（而非 404）当 thread 在 checkpointer 不存在——可能是 meta 行被
-    手工 INSERT 了但 langgraph 没真跑过，前端按"空对话"渲染即可。
+    返回空数组（而非 404）当 thread 没消息——可能是 meta 行 INSERT 了但 LLM
+    没真跑过，前端按"空对话"渲染即可。
     """
-    config = session_mgr.get_config(user_id, conversation_id)
-    cp = get_checkpointer()
-    tup = await cp.aget_tuple(config)
+    thread_id = session_mgr.get_thread_id(user_id, conversation_id)
+    store = await _get_v2_store()
+    raw_messages = await store.load_messages(thread_id)
 
     visible_messages: list[dict] = []
-    if tup is not None:
-        channel_values = tup.checkpoint.get("channel_values", {}) or {}
-        raw_messages = channel_values.get("messages", []) or []
-        for m in raw_messages:
-            cls = type(m).__name__
-            content = getattr(m, "content", "")
-            # 多模态 content 可能是 list，目前简化只处理 str
-            if not isinstance(content, str):
+    for m in raw_messages:
+        cls = type(m).__name__
+        content = getattr(m, "content", "")
+        # 多模态 content 可能是 list，目前简化只处理 str
+        if not isinstance(content, str):
+            continue
+        if cls == "HumanMessage":
+            # 跳过 DateReminder 注入的 <system-reminder> 伪 HumanMessage——
+            # 那不是用户真发的消息，前端不该展示
+            if "[DATE-REMINDER]" in content:
                 continue
-            if cls == "HumanMessage":
-                visible_messages.append({"role": "user", "content": content})
-            elif cls == "AIMessage" and content.strip():
-                # 含 tool_calls 的中间 ai 消息 content 通常为空，自然过滤掉；
-                # 留下来的是每轮的最终 markdown 回复
-                visible_messages.append({"role": "assistant", "content": content})
+            visible_messages.append({"role": "user", "content": content})
+        elif cls == "AIMessage" and content.strip():
+            # 含 tool_calls 的中间 ai 消息 content 通常为空，自然被过滤
+            visible_messages.append({"role": "assistant", "content": content})
 
     events = conversation_events.list_for_conversation(user_id, conversation_id)
     return {"messages": visible_messages, "events": events}
@@ -538,17 +469,15 @@ async def restore_conversation(user_id: str, conversation_id: str):
 
 @router.delete("/{user_id}/conversations/{conversation_id}/permanent")
 async def delete_conversation_permanent(user_id: str, conversation_id: str):
-    """硬删：双删 meta + 事件 + checkpointer thread + tool_outputs 卸盘文件。
+    """硬删：双删 meta + 事件 + ThreadStore messages + tool_outputs 卸盘文件。
     **不可逆**——前端必须先弹"无法恢复"确认框。
     """
-    config = session_mgr.get_config(user_id, conversation_id)
-    cp = get_checkpointer()
-    # langgraph checkpointer 的 adelete_thread 会清掉该 thread 在 checkpoints + writes 表
-    # 的所有行——LLM 之后看不到这段历史
+    thread_id = session_mgr.get_thread_id(user_id, conversation_id)
+    store = await _get_v2_store()
     try:
-        await cp.adelete_thread(config["configurable"]["thread_id"])
+        await store.delete_thread(thread_id)
     except Exception:
-        # checkpointer 不存在该 thread 也无所谓（meta 可能存在但 langgraph 没真跑过）
+        # store 没这个 thread 也无所谓（meta 可能存在但 LLM 没真跑过）
         pass
     conversation_events.delete_for_conversation(user_id, conversation_id)
     conversation_metrics.delete_for_conversation(user_id, conversation_id)

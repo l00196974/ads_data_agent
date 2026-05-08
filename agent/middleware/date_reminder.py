@@ -1,46 +1,38 @@
-"""DateReminderMiddleware：每轮 LLM 调用前往 messages 注入「今天是 X 月 Y 日」。
+"""DateReminder for agent.loop.AgentLoop（loop 版，不依赖 langchain.agents）。
 
-为什么不直接拼进 system_prompt：
-  当前日期每天变一次，放 system_prompt 里第一字节流就变化，破坏 OpenAI 兼容
-  自动前缀匹配 cache（DeepSeek / Qwen 等支持 prompt cache 的端点会跨天 100%
-  miss）。改成 user role <system-reminder> 注入到 messages 头部：system_prompt
-  保持永远稳定可缓存，日期变化只影响 messages 里那一条。
+每轮 model 调用前 reset 一次 messages 中的日期 system-reminder：
+1. 删除所有老 reminder（按 marker 识别——可能是跨天残留）
+2. 在 messages 头部插入今日新 reminder（HumanMessage 含 <system-reminder>）
 
-注入策略：
-  - 每次 before_model 检查 messages 是否含老 reminder（用 marker 识别），有就删掉
-  - 在 messages 最前面 insert 一条 HumanMessage 含最新 reminder + marker
-  - 跨天前后两次调用看到的 system_prompt 字节相同 → cache 命中
+为什么用 user role：ppt 4.3 / 6.2 引用 Anthropic 实测——模型对 user-role 的
+<system-reminder> 依从率高于 system-role；且 OpenAI 协议里多条 system message
+行为不可预期。
 
-为什么用 HumanMessage 而非 SystemMessage：
-  ppt 4.3 / 6.2 引用 Anthropic 实测——模型对 user-role 的 <system-reminder>
-  依从率高于 system-role；且 OpenAI 协议里多条 system message 行为不可预期，
-  user-role 标签更稳。
+为什么不进 system_prompt：当前日期每天变，破坏 prompt cache 前缀。改成 messages
+注入后 system_prompt 100% 跨天稳定。
 """
 from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
 
-from langchain.agents.middleware.types import AgentMiddleware, AgentState
 from langchain_core.messages import HumanMessage
-from langgraph.runtime import Runtime
-from langgraph.types import Overwrite
 
-# 默认 Asia/Shanghai——华为广告数据按这个口径统计；zoneinfo 在 Windows 部分发行版缺失
-# 时降级用系统时区（生产环境 Linux 一律有 zoneinfo）
+from agent.loop import AgentState
+
+# 默认时区——华为广告数据按 Asia/Shanghai 口径统计
 try:
     from zoneinfo import ZoneInfo
     _DEFAULT_TZ: "ZoneInfo | None" = ZoneInfo("Asia/Shanghai")
 except Exception:
     _DEFAULT_TZ = None
 
-# Marker 字符串——用于识别 messages 里已注入过的旧 reminder（每轮要删除老的换上最新的）
 _REMINDER_MARKER = "[DATE-REMINDER]"
 _WEEKDAY_CN = "一二三四五六日"
 
 
 def _build_today_reminder(tz=None) -> str:
-    """构造今日 reminder 文本——内容跟原 _today_context() 等价，只是多个 marker 标识。"""
+    """造今日 reminder 文本——含 marker + 当前日期 + 相对时间换算指南。"""
     effective_tz = tz if tz is not None else _DEFAULT_TZ
     now = datetime.now(effective_tz) if effective_tz else datetime.now()
     return (
@@ -58,24 +50,23 @@ def _build_today_reminder(tz=None) -> str:
     )
 
 
-class DateReminderMiddleware(AgentMiddleware):
-    """每轮 model 调用前注入最新的日期 system-reminder 到 messages 头部。"""
+class DateReminder:
+    """loop 版 middleware：注入今日日期 system-reminder。"""
 
     def __init__(self, tz=None):
-        # tz 让单测能注入固定时区；不传走 _DEFAULT_TZ（Asia/Shanghai）
         self.tz = tz
 
-    def _has_reminder(self, content: Any) -> bool:
+    def _has_marker(self, content: Any) -> bool:
         return isinstance(content, str) and _REMINDER_MARKER in content
 
-    def before_model(self, state: AgentState, runtime: Runtime[Any]) -> dict[str, Any] | None:
-        messages = state.get("messages", [])
-        today_reminder = _build_today_reminder(self.tz)
-
-        # 删除所有老 reminder（按 marker 识别，可能有跨天残留），再头部插入今日的。
-        # 注意：哪怕 marker 命中的内容跟 today_reminder 一字不差，也照常重建——
-        # 这样保证最终 messages[0] 一定是最新 reminder，不依赖时区/夏令时等边界。
-        new_messages = [m for m in messages if not self._has_reminder(getattr(m, "content", None))]
-        new_messages.insert(0, HumanMessage(content=today_reminder))
-
-        return {"messages": Overwrite(new_messages)}
+    def before_model(self, state: AgentState) -> AgentState | None:
+        today = _build_today_reminder(self.tz)
+        # 过滤老 reminder + 头部插入新 reminder
+        filtered = [m for m in state.messages if not self._has_marker(getattr(m, "content", None))]
+        new_messages = [HumanMessage(content=today)] + filtered
+        return AgentState(
+            messages=new_messages,
+            iter_count=state.iter_count,
+            thread_id=state.thread_id,
+            extras=state.extras,
+        )

@@ -1,62 +1,50 @@
-"""Middleware: truncate large business-tool outputs out of the message history.
+"""ToolOutputTruncation for agent.loop.AgentLoop（loop 版，不依赖 langgraph）。
 
-Why: deepagents' built-in argument truncation only targets `write_file` /
-`edit_file`, leaving raw `ToolMessage` content from business tools (e.g.
-`query_campaign_report` returning thousands of campaigns) unbounded. Each
-LLM round prefills the entire history, so a single 50KB tool output
-repeated across 10 rounds = 500KB of redundant tokens.
+每次 model 调用前 scan messages，超过 max_bytes 的 ToolMessage.content 写到
+data/{user_id}/tool_outputs/{conv_id}/{tool_call_id}.json，message 内容替换成
+300 字符摘要 + 文件指针。
 
-Strategy: when a ToolMessage content exceeds `max_bytes`, write the full
-content to `<data_dir>/<user_id>/tool_outputs/<tool_call_id>.json` and
-replace the in-message content with a short preview + file pointer. The
-truncated message is persisted to state via `Overwrite`, so all future
-LLM rounds see the small version.
-
-Only acts on `ToolMessage` — `AIMessage.tool_calls.args` (LLM's call
-arguments) and `HumanMessage` are untouched.
+跟老版本主要差异：
+  - 不依赖 `langgraph.config.get_config()` 拿 thread_id——直接读 state.thread_id
+  - 不返回 `Overwrite(...)` dict update——直接构造新 AgentState
+  - 不需 `langgraph.runtime.Runtime` 参数
 """
+from __future__ import annotations
+
 import json
 from pathlib import Path
-from typing import Any
 
-from langchain.agents.middleware.types import AgentMiddleware, AgentState
 from langchain_core.messages import ToolMessage
-from langgraph.config import get_config
-from langgraph.runtime import Runtime
-from langgraph.types import Overwrite
+
+from agent.loop import AgentState
 
 
-class ToolOutputTruncationMiddleware(AgentMiddleware):
-    def __init__(self, max_bytes: int, data_dir: str):
+class ToolOutputTruncation:
+    """大 ToolMessage 卸盘 + messages 替换为摘要+指针 (loop 版)。"""
+
+    def __init__(self, max_bytes: int, data_dir: str | Path):
         self.max_bytes = max_bytes
         self.data_dir = Path(data_dir)
 
-    def _user_and_conv(self) -> tuple[str, str]:
+    def _user_and_conv(self, thread_id: str) -> tuple[str, str]:
         """从 thread_id 拆出 (user_id, conv_id)。
         thread_id 格式 "{user_id}_{conv_id}"；只有 user_id 时 conv 兜底为 'default'。"""
-        try:
-            cfg = get_config()
-            thread_id = cfg.get("configurable", {}).get("thread_id", "unknown")
-        except RuntimeError:
-            thread_id = "unknown"
-        s = str(thread_id)
+        s = str(thread_id) if thread_id else "unknown"
         if "_" in s:
             user, conv = s.split("_", 1)
             return user or "unknown", conv or "default"
         return s or "unknown", "default"
 
-    def before_model(self, state: AgentState, runtime: Runtime[Any]) -> dict[str, Any] | None:
-        messages = state.get("messages", [])
-        if not messages:
+    def before_model(self, state: AgentState) -> AgentState | None:
+        if not state.messages:
             return None
 
-        # 路径加 conv 维度：永久删除 conv 时能精确 rmtree 对应子目录，避免跨会话残留
-        user_id, conv_id = self._user_and_conv()
+        user_id, conv_id = self._user_and_conv(state.thread_id)
         out_dir = self.data_dir / user_id / "tool_outputs" / conv_id
 
         modified = False
         new_messages = []
-        for m in messages:
+        for m in state.messages:
             if not isinstance(m, ToolMessage):
                 new_messages.append(m)
                 continue
@@ -66,7 +54,7 @@ class ToolOutputTruncationMiddleware(AgentMiddleware):
                 new_messages.append(m)
                 continue
 
-            # Truncate: save full content to disk, replace with summary
+            # 超阈值——卸盘 + 替换
             tool_call_id = m.tool_call_id or "unknown"
             saved_to: str | None = None
             try:
@@ -84,7 +72,7 @@ class ToolOutputTruncationMiddleware(AgentMiddleware):
             )
             summary = (
                 f"{preview}\n\n"
-                f"…[truncated by ToolOutputTruncationMiddleware; "
+                f"…[truncated by ToolOutputTruncation; "
                 f"original {len(content)} bytes; {file_note}]"
             )
             new_messages.append(ToolMessage(
@@ -94,6 +82,11 @@ class ToolOutputTruncationMiddleware(AgentMiddleware):
             ))
             modified = True
 
-        if modified:
-            return {"messages": Overwrite(new_messages)}
-        return None
+        if not modified:
+            return None
+        return AgentState(
+            messages=new_messages,
+            iter_count=state.iter_count,
+            thread_id=state.thread_id,
+            extras=state.extras,
+        )

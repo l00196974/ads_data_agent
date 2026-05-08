@@ -6,7 +6,7 @@ from .registry import (
     channel_registry,
     make_channel_registry,
 )
-from .runner import AgentRunner, agent_runner
+from .runner_v2 import AgentRunnerV2
 from .web_sse import WebSSEChannel
 
 __all__ = [
@@ -17,7 +17,6 @@ __all__ = [
     "RedisChannelRegistry",
     "channel_registry",
     "make_channel_registry",
-    "AgentRunner",
-    "agent_runner",
+    "AgentRunnerV2",
     "WebSSEChannel",
 ]

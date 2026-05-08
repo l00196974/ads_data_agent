@@ -1,4 +1,4 @@
-"""AgentRunnerV2 - 集成新链路（agent.loop + agent.state + agent.middleware_loop）。
+"""AgentRunnerV2 - 集成新链路（agent.loop + agent.state + agent.middleware）。
 
 跟 api/channel/runner.py（v1，走 deepagents/langgraph）并存。本 commit 只实现
 **核心链路 + channel SSE 事件映射**（含 HitL on_interrupt 回调），但 chat.py
@@ -33,9 +33,49 @@ from agent.loop import AgentConfig, AgentLoop, ToolCall, ToolSpec
 from agent.skill_loader import extract_artifact_ids_from_output
 from agent.state import ThreadStore
 from api.channel.base import BaseChannel
-from api.channel.runner import _format_tool_label  # 复用 v1 的 label 格式化
 
 logger = logging.getLogger(__name__)
+
+
+# 子 Agent 角色中文标签——v2 暂未接 SubAgent，但 _format_tool_label 见到 task 工具
+# 时仍按 v1 逻辑显示"派给 XXX"避免 LLM 输出错乱
+_SUBAGENT_CN_LABELS = {
+    "data-fetcher": "取数员",
+    "data-analyst": "数据分析师",
+    "issue-diagnostician": "问题诊断师",
+    "general-purpose": "通用助手",
+}
+
+
+def _format_tool_label(tool_name: str, input_data) -> str:
+    """前端展示用的工具名 + 实际参数（与 v1 行为完全一致）。
+
+    - run_command: 把完整 CLI 命令串露出来（`query-metrics --metrics ...`）
+    - task: 显示"派给 XXX（中文角色名）"
+    - 通用工具：原名 + JSON 紧凑参数（截 200 字符）
+    """
+    if not isinstance(input_data, dict) or not input_data:
+        return tool_name
+
+    if tool_name == "run_command":
+        cmd = input_data.get("command", "")
+        if isinstance(cmd, str) and cmd.strip():
+            return cmd.strip()
+        return tool_name
+
+    if tool_name == "task":
+        st = input_data.get("subagent_type", "")
+        cn = _SUBAGENT_CN_LABELS.get(st, st or "子 Agent")
+        return f"🤖 派给 {cn}"
+
+    import json as _json
+    try:
+        snippet = _json.dumps(input_data, ensure_ascii=False, separators=(",", ":"))
+    except Exception:
+        snippet = str(input_data)
+    if len(snippet) > 200:
+        snippet = snippet[:200] + "..."
+    return f"{tool_name} {snippet}"
 
 
 class AgentRunnerV2:
@@ -62,7 +102,7 @@ class AgentRunnerV2:
             user_message: 用户当前轮输入
             loop_config: AgentLoop 配置（含 system_prompt / model / interrupt_tools）
             tools: ToolSpec 列表（loop_tools 来自 SkillsPackage）
-            middlewares: middleware_loop 实例列表
+            middlewares: middleware 实例列表
         """
         # 从历史 load——P2 ThreadStore 已经稳定
         initial_messages = await self.store.load_messages(thread_id)
