@@ -45,7 +45,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
-from langchain_core.tools import StructuredTool
 
 logger = logging.getLogger(__name__)
 
@@ -65,8 +64,7 @@ class SkillsPackage:
     """所有 SKILL.md 包加载完后的产物。"""
 
     prompt_addition: str = ""           # 拼进 system prompt 的 SKILL.md 文档段
-    tools: list = field(default_factory=list)  # langgraph 老链路：list[StructuredTool]
-    loop_tools: list = field(default_factory=list)  # agent.loop 新链路：list[ToolSpec]
+    tools: list = field(default_factory=list)  # list[agent.loop.ToolSpec]，喂给 AgentLoop
     summaries: list[dict] = field(default_factory=list)  # 给 UI 面板展示的摘要
 
 
@@ -260,7 +258,7 @@ def _make_run_command_func(
     user_id: str | None = None,
     artifacts_root: Path | None = None,
 ):
-    """造 run_command 的 async callable（被 StructuredTool / ToolSpec 共用）。
+    """造 run_command 的 async callable（被 ToolSpec 包装喂给 AgentLoop）。
 
     user_id / artifacts_root：可选；若两者都提供，每次工具调用会自动生成 artifact_id +
     目录路径，并通过 subprocess env 注入给 skill 脚本（ADS_AGENT_ARTIFACT_DIR /
@@ -390,37 +388,16 @@ def _make_run_command_func(
     return run_command, available
 
 
-def _make_run_tool(
-    commands: dict[str, Path],
-    workdirs: dict[str, Path],
-    user_id: str | None = None,
-    artifacts_root: Path | None = None,
-) -> StructuredTool:
-    """老链路工具：StructuredTool 包装 run_command（langgraph/deepagents 期望此格式）。"""
-    run_command, available = _make_run_command_func(commands, workdirs, user_id, artifacts_root)
-    return StructuredTool.from_function(
-        coroutine=run_command,
-        name="run_command",
-        description=(
-            "执行已注册的业务技能 CLI 命令。\n"
-            f"可用命令：{available}\n"
-            "用法详见 system prompt 中各 skill 的完整 SKILL.md 文档。\n"
-            "调用示例：command='query-metrics --metrics click,exposure --start-date 2026-03-01'"
-        ),
-    )
-
-
 def _make_run_tool_spec(
     commands: dict[str, Path],
     workdirs: dict[str, Path],
     user_id: str | None = None,
     artifacts_root: Path | None = None,
 ):
-    """新链路工具：ToolSpec 包装 run_command（agent.loop.AgentLoop 期望此格式）。
+    """ToolSpec 包装 run_command 喂给 agent.loop.AgentLoop。
 
-    跟 _make_run_tool 共享底层 run_command 实现；差异仅在外壳：
-      - StructuredTool 期望 callable(command: str) → str
-      - ToolSpec 期望 callable(args: dict) → str，schema 是 OpenAI tool schema dict
+      - ToolSpec.func 期望 callable(args: dict) → str
+      - schema 是 OpenAI tool schema dict
 
     返回 agent.loop.ToolSpec 实例。
     """
@@ -548,8 +525,7 @@ def load_md_skills(
     artifacts_root_path = Path(artifacts_root) if artifacts_root is not None else None
     return SkillsPackage(
         prompt_addition=prompt_addition,
-        tools=[_make_run_tool(commands, workdirs, user_id=user_id, artifacts_root=artifacts_root_path)],
-        loop_tools=[_make_run_tool_spec(commands, workdirs, user_id=user_id, artifacts_root=artifacts_root_path)],
+        tools=[_make_run_tool_spec(commands, workdirs, user_id=user_id, artifacts_root=artifacts_root_path)],
         summaries=summaries,
     )
 

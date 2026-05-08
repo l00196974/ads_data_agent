@@ -101,7 +101,7 @@ class AgentRunnerV2:
             thread_id: 会话标识（用于 ThreadStore load/save + HitL）
             user_message: 用户当前轮输入
             loop_config: AgentLoop 配置（含 system_prompt / model / interrupt_tools）
-            tools: ToolSpec 列表（loop_tools 来自 SkillsPackage）
+            tools: ToolSpec 列表（来自 SkillsPackage.tools）
             middlewares: middleware 实例列表
         """
         # 从历史 load——P2 ThreadStore 已经稳定

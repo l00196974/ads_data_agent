@@ -55,7 +55,7 @@ async def test_start_v2_agent_run_assembles_correctly(tmp_path, monkeypatch):
     chat_module._v2_store_cache.clear()
     original_data_dir = chat_module.cfg.persistence.data_dir
     chat_module.cfg.persistence.data_dir = str(tmp_path)
-    # tmp skills 目录（空目录，无 SKILL.md，loop_tools 是 []）
+    # tmp skills 目录（空目录，无 SKILL.md，SkillsPackage.tools 是 []）
     skill_dir = tmp_path / "skills"
     skill_dir.mkdir()
     original_skills_dir = chat_module.cfg.skills.md_dir

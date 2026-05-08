@@ -153,7 +153,7 @@ async def _start_v2_agent_run(channel, user_id: str, conversation_id: str, messa
     - agent.loop.AgentLoop（直调 openai SDK，不走 langchain_openai 包装）
     - agent.state.ThreadStore（loop_messages 表持久化）
     - agent.middleware（DateReminder/IterationGuard/ToolOutputTruncation）
-    - SkillsPackage.loop_tools（ToolSpec 格式，run_command 派发 SKILL.md 子命令）
+    - SkillsPackage.tools（ToolSpec 格式，run_command 派发 SKILL.md 子命令）
     """
     from agent.loop import AgentConfig as LoopConfig
     from agent.middleware import DateReminder, IterationGuard, ToolOutputTruncation
@@ -205,7 +205,7 @@ async def _start_v2_agent_run(channel, user_id: str, conversation_id: str, messa
         thread_id=thread_id,
         user_message=message,
         loop_config=loop_config,
-        tools=md_pkg.loop_tools,
+        tools=md_pkg.tools,
         middlewares=middlewares,
     ))
 

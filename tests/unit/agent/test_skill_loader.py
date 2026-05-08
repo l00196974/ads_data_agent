@@ -63,7 +63,7 @@ def test_run_command_appends_artifact_trailer_to_output(skills_root):
     os.environ["ADS_AGENT_ARTIFACT_ID"] = "2026-04-30-120000-test"
     os.environ["ADS_AGENT_ARTIFACT_DIR"] = "/tmp/x"
     try:
-        output = asyncio.run(tool.coroutine(command="echo-env"))
+        output = asyncio.run(tool.func({"command": "echo-env"}))
     finally:
         del os.environ["ADS_AGENT_ARTIFACT_ID"]
         del os.environ["ADS_AGENT_ARTIFACT_DIR"]
