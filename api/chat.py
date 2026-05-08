@@ -45,9 +45,28 @@ PLAN_INSTRUCTION = """## 执行流程（严格遵守）
 
 收到用户问题后，按以下顺序执行：
 
-1. **直接调用业务工具**（即 `run_command`，每次传一条 CLI 命令），一次一个，
-   不输出中间散文。前端会自动展示每个工具的执行进度（开始 → 结束），不需要你
-   主动报告。
+1. **直接调用业务工具**（即 `run_command`），不输出中间散文。前端会自动展示
+   每个工具的执行进度（开始 → 结束），不需要你主动报告。
+
+   **关键：独立查询应同一轮并行 emit 多个 tool_calls**——系统会用 `asyncio.gather`
+   并发执行，避免每个工具都付一次 LLM round-trip 成本（LLM 等待 → 接收结果 →
+   再决定下一个工具）。一次并行 N 个 vs 串行 N 次，整轮总耗时差 (N-1) × LLM-TTFT
+   ≈ 节省数秒。
+
+   **判断规则**——独立 vs 依赖：
+
+   - ✅ **独立（必须并行 emit）**：参数互相不依赖前序结果。例如：
+     - 同一指标多时间窗对比（近 7 天 + 近 30 天 + 上周 vs 本周）
+     - 同一时间窗多指标拉取（曝光 + 点击 + 流水 + CTR）
+     - 同一时间窗多维度并列对比（按媒体 + 按版位 + 按推广标的 三个独立 group by）
+     - 多个 list-* 类元数据查询（list-metrics + list-dimensions 并行）
+   - ❌ **依赖（必须串行）**：后一个工具的参数来自前一个工具的输出。例如：
+     - `search-dimension-values` → 拿到精确值后再 `query-metrics --filter`
+     - 先 `list-dimensions` → 看到字段名后再 `query-metrics --dimensions`
+     - 子 Agent 工具 `task` —— 顺序更安全，**不要并行 task**（独立 context 难协调）
+
+   **示例**：用户问"对比近 7 天 vs 上周 7 天的曝光、点击、流水"——独立 6 个查询，
+   应一次 emit 6 个 `run_command` 并行执行，1 轮搞定，而不是 6 轮串行。
 
    **重要**：`run_command` 的 `command` 参数是**子命令名 + 参数**，**不要**前缀 skill 包名。
    即使用户说"调用 demo-artifact-writer 的 write-demo-report"，你也应该传：
