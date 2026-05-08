@@ -8,6 +8,9 @@ server:
 agent:
   max_iterations: 20
   timeout_seconds: 120
+  # runner_mode: v1（默认 / 老链路 deepagents+langgraph）or v2（新链路 agent.loop+state）
+  # v2 是去 framework 重构期产物，HitL/SubAgent 还没完整接，先小流量验证用
+  runner_mode: v1
 
   # interrupt_on: HitL 拦截规则，按风险分级。
   #   high_risk   强制弹窗，**忽略**用户的免确认白名单。用于不可逆 / 影响大的写操作

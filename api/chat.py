@@ -171,6 +171,87 @@ def _make_build_fn(user_id: str):
     return _build
 
 
+# v2 ThreadStore 单例——AgentRunnerV2 期望复用 store connection（aiosqlite + WAL）。
+# 第一次需要 v2 时 lazy init，进程内全局共享。chat 多并发也线程安全（aiosqlite
+# 内部串行化写入）。
+_v2_store_cache: dict[str, "object"] = {}
+
+
+async def _get_v2_store():
+    """lazy init agent.state.ThreadStore（v2 的状态持久化层）。"""
+    if "store" in _v2_store_cache:
+        return _v2_store_cache["store"]
+    from agent.state import ThreadStore
+    store = ThreadStore(Path(cfg.persistence.data_dir) / "checkpoints.db")
+    await store.init()
+    _v2_store_cache["store"] = store
+    return store
+
+
+async def _start_v2_agent_run(channel, user_id: str, conversation_id: str, message: str) -> asyncio.Task:
+    """装配 v2 链路 + 起 task。
+
+    跟 v1 路径（agent_runner.run + langgraph）的差异：
+    - 不走 deepagents.create_deep_agent；用 agent.loop.AgentLoop 直调
+    - 状态持久化用 agent.state.ThreadStore（loop_messages 表），不用 AsyncSqliteSaver
+    - middleware 用 agent.middleware_loop（DateReminder/IterationGuard/ToolOutputTruncation）
+    - skill 工具走 SkillsPackage.loop_tools（ToolSpec 格式）
+    """
+    from agent.loop import AgentConfig as LoopConfig
+    from agent.middleware_loop import DateReminder, IterationGuard, ToolOutputTruncation
+    from api.channel.runner_v2 import AgentRunnerV2
+
+    us = UserSpace(user_id, cfg.persistence.data_dir)
+    md_pkg = load_md_skills(
+        cfg.skills.md_dir,
+        us.skills_dir,
+        user_id=user_id,
+        artifacts_root=us.artifacts_dir,
+    )
+
+    # **system_prompt 必须 100% 跨天稳定**——同 v1 路径，日期由 DateReminder
+    # middleware 注入到 messages，不进 system_prompt
+    parts = [PLAN_INSTRUCTION, us.get_agents_md()]
+    if md_pkg.prompt_addition:
+        parts.append(md_pkg.prompt_addition)
+    system_prompt = "\n\n".join(parts)
+
+    intercepted = cfg.agent.interrupt_on.all_intercepted()
+    interrupt_tools = {name: {"risk": cfg.agent.interrupt_on.classify(name)} for name in intercepted}
+
+    loop_config = LoopConfig(
+        model=cfg.llm.model,
+        api_key=cfg.llm.api_key or None,
+        base_url=cfg.llm.base_url or None,
+        system_prompt=system_prompt,
+        recursion_limit=cfg.agent.recursion_limit,
+        interrupt_tools=interrupt_tools,
+    )
+
+    thread_id = session_mgr.get_thread_id(user_id, conversation_id)
+
+    middlewares = [
+        ToolOutputTruncation(
+            max_bytes=cfg.agent.long_context.tool_output_max_bytes,
+            data_dir=cfg.persistence.data_dir,
+        ),
+        IterationGuard(recursion_limit=cfg.agent.recursion_limit),
+        DateReminder(),
+    ]
+
+    store = await _get_v2_store()
+    runner_v2 = AgentRunnerV2(store)
+
+    return asyncio.create_task(runner_v2.run(
+        channel=channel,
+        thread_id=thread_id,
+        user_message=message,
+        loop_config=loop_config,
+        tools=md_pkg.loop_tools,
+        middlewares=middlewares,
+    ))
+
+
 def _register_active_task(conversation_id: str, task: asyncio.Task) -> None:
     """完成时清理；只清理"还是当前 task"的那条记录（被 append 顶替的就别动）。"""
     def _cleanup(t: asyncio.Task) -> None:
@@ -198,17 +279,33 @@ async def chat(user_id: str, req: ChatRequest):
     # 后续 → UPDATE last_active_at + message_count++（同时清归档状态）。
     conversation_meta.upsert(user_id, conversation_id, req.message)
 
-    build_fn = _make_build_fn(user_id)
-    config = session_mgr.get_config(user_id, conversation_id)
-
-    task = asyncio.create_task(agent_runner.run(channel, req.message, build_fn, config))
-    _active_runs[conversation_id] = {
-        "task": task,
-        "channel": channel,
-        "build_fn": build_fn,
-        "config": config,
-        "session_id": session_id,
-    }
+    # v1 / v2 runner 选择——cfg.agent.runner_mode（默认 v1，走 deepagents/langgraph）
+    if cfg.agent.runner_mode == "v2":
+        # 新链路：agent.loop + agent.state + agent.middleware_loop
+        task = await _start_v2_agent_run(channel, user_id, conversation_id, req.message)
+        # _active_runs 字段保留 build_fn / config 是为 v1 append 路径用的；v2 path
+        # 暂不支持 append（追问），先用 None 占位，append endpoint 会按 None 走 v2 重新装配
+        _active_runs[conversation_id] = {
+            "task": task,
+            "channel": channel,
+            "build_fn": None,
+            "config": None,
+            "session_id": session_id,
+            "runner_mode": "v2",
+        }
+    else:
+        # 老链路：deepagents + langgraph
+        build_fn = _make_build_fn(user_id)
+        config = session_mgr.get_config(user_id, conversation_id)
+        task = asyncio.create_task(agent_runner.run(channel, req.message, build_fn, config))
+        _active_runs[conversation_id] = {
+            "task": task,
+            "channel": channel,
+            "build_fn": build_fn,
+            "config": config,
+            "session_id": session_id,
+            "runner_mode": "v1",
+        }
     _register_active_task(conversation_id, task)
 
     async def event_generator():

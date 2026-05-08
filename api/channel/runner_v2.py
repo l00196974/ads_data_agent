@@ -178,3 +178,8 @@ class AgentRunnerV2:
                     await self.store.overwrite_messages(thread_id, final_messages_from_loop)
                 except Exception as e:
                     logger.warning("ThreadStore.overwrite_messages failed thread=%s: %s", thread_id, e)
+            # 关闭 channel 以让 SSE 流给客户端发 'done' 事件——跟老 runner 行为对齐
+            try:
+                await channel.close()
+            except Exception as e:
+                logger.warning("channel.close failed: %s", e)

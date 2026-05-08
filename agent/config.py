@@ -102,6 +102,12 @@ class AgentConfig(BaseModel):
     # 默认 150 覆盖大多数数据诊断场景（多维下钻 + 对比分析 + 人群画像 ≈ 50-80 steps）。
     # 提到太高（>300）通常是死循环——遇到撞 limit 应当先看 messages 而不是无脑加大。
     recursion_limit: int = 150
+    # Runner 实现选择（去 framework 重构期间共存）：
+    #   v1: deepagents/langgraph 老链路（runner.py）——稳定、HitL 完整、SubAgent 可用
+    #   v2: 纯 Python 新链路（runner_v2.py + agent/loop.py + agent/state.py）——
+    #     更轻、可控、framework 0 依赖，但 P3d 期间 SubAgent 还没接，HitL 简化版
+    # 默认 v1 不破坏现有用户；想试新链路在 config.yaml::agent.runner_mode: v2
+    runner_mode: str = "v1"
     interrupt_on: InterruptConfig = InterruptConfig()
     long_context: LongContextConfig = LongContextConfig()
     subagents: list[SubAgentSpec] = []  # 主 Agent 可派工的子 Agent 列表
