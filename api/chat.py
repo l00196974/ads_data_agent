@@ -155,8 +155,9 @@ async def _start_v2_agent_run(channel, user_id: str, conversation_id: str, messa
     - agent.middleware（DateReminder/IterationGuard/ToolOutputTruncation）
     - SkillsPackage.tools（ToolSpec 格式，run_command 派发 SKILL.md 子命令）
     """
-    from agent.loop import AgentConfig as LoopConfig
-    from agent.middleware import DateReminder, IterationGuard, ToolOutputTruncation
+    from agent.loop import AgentConfig as LoopConfig, AgentLoop
+    from agent.middleware import DateReminder, IterationGuard, Summarization, ToolOutputTruncation
+    from agent.subagent import make_task_tool
     from api.channel.runner_v2 import AgentRunnerV2
 
     us = UserSpace(user_id, cfg.persistence.data_dir)
@@ -188,10 +189,21 @@ async def _start_v2_agent_run(channel, user_id: str, conversation_id: str, messa
 
     thread_id = session_mgr.get_thread_id(user_id, conversation_id)
 
+    # Summarization 需要 openai client——跟主 loop 复用同一 client（避免新建连接）
+    # 通过临时 AgentLoop 实例拿 client（仅为获取 client，loop 实例本身丢弃）
+    _client_donor = AgentLoop(config=loop_config, tools=[], middlewares=[])
+    summarization_client = _client_donor._get_client()
+
     middlewares = [
         ToolOutputTruncation(
             max_bytes=cfg.agent.long_context.tool_output_max_bytes,
             data_dir=cfg.persistence.data_dir,
+        ),
+        Summarization(
+            openai_client=summarization_client,
+            model=cfg.llm.model,
+            trigger_tokens=cfg.agent.long_context.summarization_trigger_tokens,
+            keep_messages=cfg.agent.long_context.summarization_keep_messages,
         ),
         IterationGuard(recursion_limit=cfg.agent.recursion_limit),
         DateReminder(),
@@ -200,12 +212,24 @@ async def _start_v2_agent_run(channel, user_id: str, conversation_id: str, messa
     store = await _get_v2_store()
     runner_v2 = AgentRunnerV2(store)
 
+    # 构造 tools 列表 = skill tools + 可选 task tool（subagents 配置非空时才加）
+    tools = list(md_pkg.tools)
+    task_tool = make_task_tool(
+        subagents=cfg.agent.subagents,
+        base_loop_config=loop_config,
+        skill_tools=md_pkg.tools,  # 子 loop 共享同一套 skill 工具
+        channel=channel,
+        thread_id=thread_id,
+    )
+    if task_tool is not None:
+        tools.append(task_tool)
+
     return asyncio.create_task(runner_v2.run(
         channel=channel,
         thread_id=thread_id,
         user_message=message,
         loop_config=loop_config,
-        tools=md_pkg.tools,
+        tools=tools,
         middlewares=middlewares,
     ))
 
