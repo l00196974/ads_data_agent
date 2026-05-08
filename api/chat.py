@@ -167,11 +167,19 @@ def _make_build_fn(user_id: str):
         artifacts_root=us.artifacts_dir,
     )
 
-    # SKILL.md 全文塞进 system prompt，LLM 直接看 CLI 用法
-    # 当前日期放最前面——LLM 必须先知道"今天是几号"，才能正确解析"最近一个月"等相对时间
-    system_prompt = _today_context() + "\n\n" + PLAN_INSTRUCTION + "\n\n" + us.get_agents_md()
+    # **拼装顺序：最稳定 → 最易变（cache 命中友好）**
+    # OpenAI 兼容 LLM（DeepSeek/Qwen/MiniMax/火山）走自动前缀匹配 cache，prompt 第一字节
+    # 变化即整段失效。当前日期"今天是 X 月 Y 日"每天变——必须放最末尾，让前面 ~11K
+    # 稳定字段（PLAN/agents.md/SKILL.md）跨天仍命中前缀 cache，只有末尾 ~150 token
+    # 日期段每天 prefill 一次。
+    parts = [
+        PLAN_INSTRUCTION,         # 1. 执行流程（最稳定，几乎从不变）
+        us.get_agents_md(),        # 2. system_agent.md 项目级 + 用户 agents.md（统计口径/数字格式化等业务规则）
+    ]
     if md_pkg.prompt_addition:
-        system_prompt += "\n\n" + md_pkg.prompt_addition
+        parts.append(md_pkg.prompt_addition)  # 3. SKILL.md 业务工具描述（skill 列表变更时才变）
+    parts.append(_today_context())             # 4. 当前日期（每天变，固定放最末尾）
+    system_prompt = "\n\n".join(parts)
 
     def _build(extra_tools=None):
         # 业务工具集 = SKILL.md 加载出的 run_command 通用工具（如果有 skill 包）
