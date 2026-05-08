@@ -52,7 +52,7 @@ system_prompt = _today_context() + "\n\n" + PLAN_INSTRUCTION + "\n\n" + us.get_a
 
 测试场景：两轮相同问题（`{"message": "你好"}`）连续发送，观察第二轮 `cache_read_tokens`。
 
-**测试 endpoint**：火山方舟 `https://ark.cn-beijing.volces.com/api/coding/v3` + `minimax-latest`
+**测试 endpoint**：火山方舟 `https://ark.cn-beijing.volces.com/api/coding/v3` + `minimax-latest`（CodePlan 模式）
 
 | 指标 | Round 1 | Round 2 |
 |---|---|---|
@@ -60,10 +60,9 @@ system_prompt = _today_context() + "\n\n" + PLAN_INSTRUCTION + "\n\n" + us.get_a
 | **cache_read_tokens** | **0** | **0** |
 | TTFT (ms) | 7703 | 5990 |
 
-**结论**：当前 endpoint **不上报 / 不支持 prompt cache**。可能原因：
-- minimax-latest 模型本身不支持 prompt cache
-- 火山方舟 coding/v3 网关层不开启 cache
-- 需要特殊请求参数（如 `prompt_cache_enable=true`）才能开
+**结论**：火山方舟 CodePlan 模式**确认不支持 prompt cache**——查阅官方文档无相关
+开关 / 参数。`api/coding/v3` 端点专为 coding 场景优化但不暴露 cache 控制，整轮
+prompt 全价 prefill。
 
 改动本身**结构性正确**，等切到支持 cache 的端点会立刻生效——不需要回滚。
 
@@ -92,10 +91,10 @@ LLM_MODEL=qwen-max
 通义部分模型支持 context cache，需要传 `enable_context_cache=true` 参数（透传到
 ChatOpenAI 的 `extra_body`）。
 
-### 选项 C：联系火山方舟支持开启
+### 选项 C：火山方舟其它端点
 
-目前 `minimax-latest` 不上报 cache。可联系火山方舟问该模型是否支持 prompt cache，
-是否需要切到不同模型 / 端点（如 `doubao-pro-128k`）。
+CodePlan 模式（`/api/coding/v3`）确认不支持 cache。火山方舟 `/api/v3` 通用端点 +
+`doubao-*` 系列模型可能支持，需要查官方文档具体到模型。
 
 ## 验证步骤
 

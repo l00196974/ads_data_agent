@@ -1,13 +1,6 @@
 import asyncio
-from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
-
-try:
-    from zoneinfo import ZoneInfo
-    _TZ = ZoneInfo("Asia/Shanghai")
-except Exception:
-    _TZ = None
 
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
@@ -134,24 +127,9 @@ PLAN_INSTRUCTION = """## 执行流程（严格遵守）
 """
 
 
-_WEEKDAY_CN = "一二三四五六日"
-
-
-def _today_context() -> str:
-    """运行时的"今天是几号"——LLM 默认不知道当前日期，相对时间（"最近一个月"
-    / "上周" / "昨天"）必须以这个为基准计算，否则会用训练截止日期答错。"""
-    now = datetime.now(_TZ) if _TZ else datetime.now()
-    return (
-        "## 当前时间\n"
-        f"今天是 **{now.strftime('%Y年%m月%d日')}**（`{now.strftime('%Y-%m-%d')}`，"
-        f"星期{_WEEKDAY_CN[now.weekday()]}）。\n"
-        "用户提到的相对时间一律以此为基准换算：\n"
-        "- \"最近一个月\" / \"近30天\" → `start = today - 30d, end = today`\n"
-        "- \"上个月\" → 上一个自然月（1日 ~ 月末）\n"
-        "- \"本月\" → 本月 1 日 ~ today\n"
-        "- \"昨天\" → today - 1d\n"
-        "- \"上周\" → 上一个自然周（周一 ~ 周日）\n"
-    )
+# 历史 _today_context() / _WEEKDAY_CN 已迁移到 agent/middleware/date_reminder.py
+# system_prompt 必须 100% 跨天稳定（OpenAI 兼容 cache 前缀），日期改成 middleware
+# 每轮注入 <system-reminder> 到 messages 头部
 
 
 def _make_build_fn(user_id: str):
@@ -167,18 +145,15 @@ def _make_build_fn(user_id: str):
         artifacts_root=us.artifacts_dir,
     )
 
-    # **拼装顺序：最稳定 → 最易变（cache 命中友好）**
-    # OpenAI 兼容 LLM（DeepSeek/Qwen/MiniMax/火山）走自动前缀匹配 cache，prompt 第一字节
-    # 变化即整段失效。当前日期"今天是 X 月 Y 日"每天变——必须放最末尾，让前面 ~11K
-    # 稳定字段（PLAN/agents.md/SKILL.md）跨天仍命中前缀 cache，只有末尾 ~150 token
-    # 日期段每天 prefill 一次。
+    # **system_prompt 必须 100% 跨天稳定**——OpenAI 兼容 LLM（DeepSeek/Qwen 等）走自动
+    # 前缀匹配 cache，第一字节变化即整段失效。当前日期由 DateReminderMiddleware 每轮
+    # model 调用前以 <system-reminder> 形式注入到 messages 头部，**不**进入 system_prompt。
     parts = [
-        PLAN_INSTRUCTION,         # 1. 执行流程（最稳定，几乎从不变）
-        us.get_agents_md(),        # 2. system_agent.md 项目级 + 用户 agents.md（统计口径/数字格式化等业务规则）
+        PLAN_INSTRUCTION,         # 执行流程（几乎从不变）
+        us.get_agents_md(),        # system_agent.md 项目级 + 用户 agents.md
     ]
     if md_pkg.prompt_addition:
-        parts.append(md_pkg.prompt_addition)  # 3. SKILL.md 业务工具描述（skill 列表变更时才变）
-    parts.append(_today_context())             # 4. 当前日期（每天变，固定放最末尾）
+        parts.append(md_pkg.prompt_addition)  # SKILL.md 业务工具描述
     system_prompt = "\n\n".join(parts)
 
     def _build(extra_tools=None):

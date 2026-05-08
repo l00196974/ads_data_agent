@@ -11,7 +11,11 @@ from deepagents import create_deep_agent
 from agent.checkpointer import get_checkpointer
 from agent.config import AppConfig, load_config
 from agent.llm import _build_model
-from agent.middleware import IterationGuardMiddleware, ToolOutputTruncationMiddleware
+from agent.middleware import (
+    DateReminderMiddleware,
+    IterationGuardMiddleware,
+    ToolOutputTruncationMiddleware,
+)
 from agent.store import get_store
 
 
@@ -112,6 +116,10 @@ def build_agent(
         ),
         # 步数感知：接近 recursion_limit 时往 messages 里注入 system 警告，让 LLM 自我收敛
         IterationGuardMiddleware(recursion_limit=cfg.agent.recursion_limit),
+        # 日期 reminder：当前日期不再拼进 system_prompt（破坏 cache 前缀），改成每轮 model
+        # 调用前往 messages 头部注入最新的 <system-reminder>。system_prompt 跨天保持稳定
+        # 100% 命中 prompt cache，日期变化只影响一条 message。
+        DateReminderMiddleware(),
     ]
 
     # 子 Agent 列表（独立 context window，主→子任务委派靠 deepagents 内置 task 工具）。
