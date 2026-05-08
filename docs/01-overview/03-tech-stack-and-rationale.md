@@ -1,5 +1,9 @@
 # 03 技术选型与理由（Tech Stack & Rationale）
 
+> ⚠️ **2026-05 重构后**：本文写于 deepagents/langgraph 时代，列出的"deepagents 选型理由"
+> / "langgraph checkpointer 选型理由" 已不再成立——项目已去框架，改为纯 Python
+> 自实现。具体迁移决策见 `agent/loop.py` 顶部 docstring。本文当历史决策记录。
+
 每项选型背后都有对应的"否则会怎样"。本篇不重复列功能，只列**为什么这么选**。
 
 ## 一、技术栈速览

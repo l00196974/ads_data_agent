@@ -1,5 +1,8 @@
 # 01 项目定位（Project Positioning）
 
+> ⚠️ **2026-05 重构后**：本文提及的 deepagents/langgraph 框架已被替换为纯 Python
+> agent loop（`agent/loop.py`）。功能不变，技术栈细节看 `CLAUDE.md` / [`docs/README.md`](../README.md) 顶部映射表。
+
 ## 一、一句话定位
 
 **华为广告平台数据分析 AI Agent** —— 一个让营销 / 运维 / 数据分析师通过自然语言对话，

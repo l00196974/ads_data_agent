@@ -1,5 +1,9 @@
 # 02 架构总览（Architecture at a Glance）
 
+> ⚠️ **2026-05 重构后**：本文架构图含 `deepagents.create_deep_agent` / `AsyncSqliteSaver`
+> / `langgraph` 等字样——这些已被 `agent/loop.py::AgentLoop` / `agent/state.py::ThreadStore`
+> / 直调 `openai SDK` 替代。当前架构看 `CLAUDE.md`，本文用于历史/概念参考。
+
 > 30 秒读懂"项目长什么样"。深度内容指向 `02-features/`。
 
 ## 一、一张图

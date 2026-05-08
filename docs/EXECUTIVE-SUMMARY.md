@@ -1,5 +1,10 @@
 # 华为广告 Data Agent — 技术架构评审概要
 
+> ⚠️ **2026-05 重构后**：本文写于 deepagents/langgraph 时代，提及的 `create_deep_agent`
+> / `AsyncSqliteSaver` / `langgraph` 字样已不再适用。当前架构为纯 Python agent loop
+> （`agent/loop.py` + `agent/state.py`）。映射详见 [`docs/README.md`](./README.md) 顶部表格，
+> 新架构入门看 `CLAUDE.md`。本文当历史背景。
+
 > 用于内部技术评审 / 对外技术品牌的高密度版本。
 > 详细文档体系见 [docs/](./README.md)；本概要约 12 屏，每屏一段，用 `---` 分隔。
 

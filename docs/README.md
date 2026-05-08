@@ -4,6 +4,29 @@
 与"Why（决策记录）"分离的原则组织。CLAUDE.md / README.md 是给 IDE-Agent 与初次接入者
 看的入口，本目录给评审、对接方、贡献者看。
 
+> ## ⚠️ 重构通知（2026-05）
+>
+> 项目已从 **deepagents + langgraph** 框架迁移到 **纯 Python agent loop**。本目录下许多
+> 文档（02-features 多数 / 03-api-reference / 04-operations 部分）写于框架时代，提到
+> `create_deep_agent` / `AsyncSqliteSaver` / `astream_events` / `langgraph` /
+> `deepagents` 等字样。**当前实现以 `agent/` 当前代码为准**，文档当历史背景看。
+>
+> 框架字样到新架构的映射：
+>
+> | 老说法（仍在文档里） | 新位置 |
+> |---|---|
+> | `deepagents.create_deep_agent` | `agent/loop.py::AgentLoop` |
+> | `langgraph` 主循环 / `astream_events` | `agent/loop.py::AgentLoop.run()` async generator |
+> | `AsyncSqliteSaver` checkpointer | `agent/state.py::ThreadStore` |
+> | `AsyncSqliteStore` | 已删除（业务不需要 langgraph store） |
+> | `langchain_openai.ChatOpenAI` | `openai.AsyncOpenAI` 直调 |
+> | `langchain.agents.middleware.types.AgentMiddleware` | duck typing，对象有 `before_model(state) -> AgentState \| None` 即可 |
+> | `langgraph.types.Command(resume=...)` / `GraphInterrupt` | 直接 `on_interrupt` callback |
+> | `SubAgentMiddleware` 注入的 `task` 工具 | `agent/subagent.py::make_task_tool` |
+> | `SummarizationMiddleware` (deepagents 默认) | `agent/middleware/summarization.py::Summarization` |
+>
+> CLAUDE.md 已按 v2 重写——首次读项目从 CLAUDE.md 入手，本目录文档当深度参考。
+
 > **想要 12 屏概要？** → [`EXECUTIVE-SUMMARY.md`](./EXECUTIVE-SUMMARY.md) — 评审 / 对外宣讲用的高密度版本（项目定位 / 架构亮点 / 6 条核心 ADR / 已知风险 / 路线图 / 待决策事项）。
 
 ## 阅读路径建议
