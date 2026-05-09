@@ -40,6 +40,8 @@ from typing import Any, AsyncIterator, Awaitable, Callable, Protocol
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from openai import AsyncOpenAI
 
+from agent.token_breakdown import estimate_breakdown
+
 logger = logging.getLogger(__name__)
 
 
@@ -355,6 +357,12 @@ class AgentLoop:
 
             yield {"type": "model_start", "call_seq": step + 1}
 
+            # 算 breakdown：在 middleware 跑完后、send to LLM 之前——messages 已是
+            # 真实将被打包发出的最终形态（含 DateReminder 注入等）
+            breakdown = estimate_breakdown(
+                state.messages, self.config.system_prompt, self.config.model
+            )
+
             # 调 LLM 流式
             t_request_start = time.perf_counter()
             try:
@@ -376,6 +384,9 @@ class AgentLoop:
             ai_msg: AIMessage | None = None
             tool_calls: list[ToolCall] = []
             async for ev in self._consume_stream(stream, t_request_start):
+                if ev["type"] == "model_end" and breakdown is not None:
+                    # 把 breakdown 合到 usage 里——runner_v2 / subagent 走 **usage 自动透传给 channel
+                    ev.setdefault("usage", {})["breakdown"] = breakdown
                 if ev["type"] == "token":
                     yield ev
                 elif ev["type"] == "model_end":
