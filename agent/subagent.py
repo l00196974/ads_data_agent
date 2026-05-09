@@ -102,6 +102,7 @@ def make_task_tool(
 
         sub_thread_id = f"{thread_id}__sub_{subagent_type}"
         final_text: str = ""
+        sub_call_seq = 0
 
         async for ev in sub_loop.run(
             user_message=description,
@@ -110,8 +111,34 @@ def make_task_tool(
         ):
             ev_type = ev["type"]
 
+            if ev_type == "model_start":
+                sub_call_seq = ev["call_seq"]
+
+            elif ev_type == "model_end":
+                # 子 Agent 也透传 metrics——带 subagent=name 标记，前端 metrics-bar
+                # 显示"🤖 取数员"图标。子 Agent 用独立 context，所以不算
+                # context_used_pct（那个进度条是主 thread 概念）
+                usage = ev.get("usage") or {}
+                if usage:
+                    out_tokens = usage.get("output_tokens") or 0
+                    duration_ms = usage.get("duration_ms") or 0
+                    ttft_ms = usage.get("ttft_ms") or 0
+                    gen_ms = max(1, duration_ms - ttft_ms)
+                    metrics_payload = {
+                        "call_seq": sub_call_seq,
+                        "subagent": subagent_type,
+                        "model": sub_config.model,
+                        **usage,
+                    }
+                    if out_tokens > 0 and gen_ms > 0:
+                        metrics_payload["tps"] = out_tokens * 1000 / gen_ms
+                    try:
+                        await channel.send_metrics(metrics_payload)
+                    except Exception:
+                        pass
+
             # 子 loop 工具事件转发到 channel（带 subagent= 标记，前端嵌套展示）
-            if ev_type == "tool_start":
+            elif ev_type == "tool_start":
                 label = _format_label_for_step(ev["tool_name"], ev.get("args", {}))
                 skill_subcmd = None
                 if ev["tool_name"] == "run_command":

@@ -231,6 +231,7 @@ async def _start_v2_agent_run(channel, user_id: str, conversation_id: str, messa
         loop_config=loop_config,
         tools=tools,
         middlewares=middlewares,
+        context_trigger=cfg.agent.long_context.summarization_trigger_tokens,
     ))
 
 

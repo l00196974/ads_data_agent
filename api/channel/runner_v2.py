@@ -47,6 +47,42 @@ _SUBAGENT_CN_LABELS = {
 }
 
 
+def _enrich_metrics(
+    usage: dict[str, Any],
+    *,
+    call_seq: int,
+    subagent: str | None,
+    model: str,
+    context_trigger: int,
+) -> dict[str, Any]:
+    """把 loop 给的原始 usage（含 ttft_ms / duration_ms / cache_read_tokens）补全
+    成前端 metrics-bar 需要的完整 schema：算 TPS、context_used_pct、context_trigger。
+
+    - tps = output_tokens / 生成阶段秒数（duration - ttft）。生成不到 1ms 算时给 None
+      让前端隐藏 ⚡ 显示，避免显示 ∞ 或者奇怪数字
+    - context_used_pct: 仅主 Agent（subagent=None）算，子 Agent 跑独立 context 跟主
+      context bar 无关
+    """
+    out = {
+        "call_seq": call_seq,
+        "subagent": subagent,
+        "model": model,
+        **usage,
+    }
+    # TPS = output_tokens / 生成阶段秒数（=duration - ttft）
+    out_tokens = usage.get("output_tokens") or 0
+    duration_ms = usage.get("duration_ms") or 0
+    ttft_ms = usage.get("ttft_ms") or 0
+    gen_ms = max(1, duration_ms - ttft_ms)
+    if out_tokens > 0 and gen_ms > 0:
+        out["tps"] = out_tokens * 1000 / gen_ms
+    # 上下文使用率——只主 Agent 算，子 Agent 不进度条
+    if subagent is None and usage.get("input_tokens") and context_trigger:
+        out["context_used_pct"] = usage["input_tokens"] * 100.0 / context_trigger
+        out["context_trigger"] = context_trigger
+    return out
+
+
 def _format_tool_label(tool_name: str, input_data) -> str:
     """前端展示用的工具名 + 实际参数（与 v1 行为完全一致）。
 
@@ -93,6 +129,7 @@ class AgentRunnerV2:
         loop_config: AgentConfig,
         tools: list[ToolSpec],
         middlewares: list[Any],
+        context_trigger: int = 80000,
     ) -> None:
         """主入口：跑一轮 user_message，把 loop 事件翻译成 channel SSE 事件。
 
@@ -164,12 +201,15 @@ class AgentRunnerV2:
                     latest_ai_message = ev["ai_message"]
                     latest_usage = ev.get("usage") or {}
                     if latest_usage:
-                        await channel.send_metrics({
-                            "call_seq": chat_call_seq,
-                            "subagent": None,
-                            "model": loop_config.model,
-                            **latest_usage,
-                        })
+                        await channel.send_metrics(
+                            _enrich_metrics(
+                                latest_usage,
+                                call_seq=chat_call_seq,
+                                subagent=None,
+                                model=loop_config.model,
+                                context_trigger=context_trigger,
+                            )
+                        )
                 elif ev_type == "tool_start":
                     label = _format_tool_label(ev["tool_name"], {"command": ev["args"].get("command", "")})
                     skill_subcmd = None

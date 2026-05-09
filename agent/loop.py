@@ -43,6 +43,17 @@ from openai import AsyncOpenAI
 logger = logging.getLogger(__name__)
 
 
+def _read_attr(obj: Any, dotted_path: str) -> Any:
+    """安全读取嵌套属性（如 'prompt_tokens_details.cached_tokens'）——任意环节
+    缺失返回 None。OpenAI 兼容 provider 字段不齐时不抛错。"""
+    cur = obj
+    for part in dotted_path.split("."):
+        cur = getattr(cur, part, None)
+        if cur is None:
+            return None
+    return cur
+
+
 # ============================================================
 # 数据载体
 # ============================================================
@@ -203,27 +214,43 @@ class AgentLoop:
     async def _consume_stream(
         self,
         stream: Any,
+        t_request_start: float,
     ) -> AsyncIterator[dict]:
-        """消费 openai 流式响应——yield token 增量 + 最后 yield 完整 ai_message + tool_calls。"""
+        """消费 openai 流式响应——yield token 增量 + 最后 yield 完整 ai_message + tool_calls。
+
+        `t_request_start` 是上层调 `client.chat.completions.create` 之前的 perf_counter()——
+        用来算 ttft_ms（首 token 延迟）和 duration_ms（整段响应耗时），喂给 runner 算 TPS。
+        """
         accumulated_content = ""
         # tool_calls 增量按 index 累积——OpenAI 协议每个 chunk 可能含部分 args JSON
         tool_calls_by_index: dict[int, dict] = {}
         usage: dict[str, Any] = {}
         finish_reason: str | None = None
+        ttft_ms: int | None = None  # 首 token 延迟（ms）
 
         async for chunk in stream:
             if not chunk.choices:
                 # 有些厂商把 usage 放在末尾的空 choices chunk 里
                 if hasattr(chunk, "usage") and chunk.usage:
+                    # cache 命中字段——不同厂商命名各异，全试一遍取最大非零值
+                    cache_read = (
+                        _read_attr(chunk.usage, "prompt_tokens_details.cached_tokens")
+                        or _read_attr(chunk.usage, "prompt_cache_hit_tokens")
+                        or _read_attr(chunk.usage, "cached_tokens")
+                        or 0
+                    )
                     usage = {
                         "input_tokens": getattr(chunk.usage, "prompt_tokens", 0),
                         "output_tokens": getattr(chunk.usage, "completion_tokens", 0),
                         "total_tokens": getattr(chunk.usage, "total_tokens", 0),
+                        "cache_read_tokens": int(cache_read or 0),
                     }
                 continue
             choice = chunk.choices[0]
             delta = choice.delta
             if delta.content:
+                if ttft_ms is None:
+                    ttft_ms = int((time.perf_counter() - t_request_start) * 1000)
                 accumulated_content += delta.content
                 yield {"type": "token", "delta": delta.content}
             if delta.tool_calls:
@@ -244,6 +271,12 @@ class AgentLoop:
                             tool_calls_by_index[idx]["arguments"] += tc_delta.function.arguments
             if choice.finish_reason:
                 finish_reason = choice.finish_reason
+
+        # 统计耗时——duration_ms 是从请求开始到最后一个 chunk
+        duration_ms = int((time.perf_counter() - t_request_start) * 1000)
+        if usage:
+            usage["ttft_ms"] = ttft_ms or duration_ms  # 工具调用模式下没 token 流，ttft=duration
+            usage["duration_ms"] = duration_ms
 
         # 解析累积的 tool_calls JSON
         parsed_tool_calls: list[ToolCall] = []
@@ -323,6 +356,7 @@ class AgentLoop:
             yield {"type": "model_start", "call_seq": step + 1}
 
             # 调 LLM 流式
+            t_request_start = time.perf_counter()
             try:
                 stream = await client.chat.completions.create(
                     model=self.config.model,
@@ -341,7 +375,7 @@ class AgentLoop:
             # 消费流，转发 token 事件，攒最后的 ai_message + tool_calls
             ai_msg: AIMessage | None = None
             tool_calls: list[ToolCall] = []
-            async for ev in self._consume_stream(stream):
+            async for ev in self._consume_stream(stream, t_request_start):
                 if ev["type"] == "token":
                     yield ev
                 elif ev["type"] == "model_end":
