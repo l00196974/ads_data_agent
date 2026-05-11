@@ -228,6 +228,12 @@ class AgentLoop:
         usage: dict[str, Any] = {}
         finish_reason: str | None = None
         ttft_ms: int | None = None  # 首 token 延迟（ms）
+        # reasoning_content：Qwen3 / DeepSeek-R1 / 火山方舟某些推理模型把"思考过程"
+        # 单独输出到这个字段（不在 delta.content 里）。如果模型 reasoning-only 输出
+        # 而我们只读 content，content 就是空的，但 usage 仍报输入 tokens——
+        # 表现为"LLM 没返回任何东西"。我们把 reasoning 也累积起来，至少能 fallback
+        # 当 content 时给用户看，避免静默空答。
+        accumulated_reasoning = ""
 
         async for chunk in stream:
             if not chunk.choices:
@@ -254,6 +260,10 @@ class AgentLoop:
                     ttft_ms = int((time.perf_counter() - t_request_start) * 1000)
                 accumulated_content += delta.content
                 yield {"type": "token", "delta": delta.content}
+            # 推理模型的 reasoning_content 字段（OpenAI 标准之外的扩展）
+            reasoning_delta = getattr(delta, "reasoning_content", None)
+            if reasoning_delta:
+                accumulated_reasoning += reasoning_delta
             if delta.tool_calls:
                 for tc_delta in delta.tool_calls:
                     idx = tc_delta.index
@@ -294,9 +304,29 @@ class AgentLoop:
                 args=args,
             ))
 
+        # 关键诊断日志——LLM 返了什么 finish_reason、content 多大、reasoning 多大、
+        # 有几个 tool_calls。空答场景（output_tokens=0 且无 tool_calls）这条 log
+        # 直接定位是 finish_reason 异常 / reasoning-only / 还是别的
+        logger.info(
+            "model_end: finish_reason=%s content_chars=%d reasoning_chars=%d tool_calls=%d output_tokens=%d",
+            finish_reason, len(accumulated_content), len(accumulated_reasoning),
+            len(parsed_tool_calls), (usage or {}).get("output_tokens", 0),
+        )
+
+        # 空答兜底：content 空、无 tool_calls，但 reasoning 不空——说明是推理模型
+        # 把全部内容输到了 reasoning_content 字段。把 reasoning 当作 content 给用户，
+        # 至少不要显示"什么都没有"。
+        effective_content = accumulated_content
+        if not accumulated_content and not parsed_tool_calls and accumulated_reasoning:
+            effective_content = accumulated_reasoning
+            logger.warning(
+                "LLM content empty but reasoning_content has %d chars — falling back to reasoning",
+                len(accumulated_reasoning),
+            )
+
         # 构造 AIMessage（tool_calls 字段是 list[dict] 形）
         ai_msg = AIMessage(
-            content=accumulated_content,
+            content=effective_content,
             tool_calls=[{"id": tc.id, "name": tc.name, "args": tc.args, "type": "tool_call"} for tc in parsed_tool_calls],
         )
         yield {

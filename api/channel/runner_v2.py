@@ -236,6 +236,21 @@ class AgentRunnerV2:
                 elif ev_type == "complete":
                     latest_ai_message = ev["final_message"]
                     final_messages_from_loop = ev.get("final_messages")
+                    # 空答兜底：如果 LLM 既没流 token 也没工具调用、最终 content 又空，
+                    # 给用户一个明确提示而不是静默关闭。常见原因：
+                    # - finish_reason="content_filter"（模型拒答）
+                    # - 推理模型把内容全输到 reasoning_content（loop 已尝试 fallback）
+                    # - 模型 endpoint 配置问题
+                    final_content = getattr(latest_ai_message, "content", "") or ""
+                    final_tool_calls = getattr(latest_ai_message, "tool_calls", None) or []
+                    if not final_content.strip() and not final_tool_calls:
+                        await channel.send_token(
+                            "\n\n⚠️ LLM 返回空响应（无内容、无工具调用）。可能原因：\n"
+                            "- 模型触发 content_filter 拒答\n"
+                            "- 模型 endpoint 配置异常（推理模式 / chat_template 问题）\n"
+                            "- 上下文超限被截断\n"
+                            "看后端日志 `model_end: finish_reason=...` 一行可定位。"
+                        )
                     # 不发额外事件——token 已流完
                     break
                 elif ev_type == "recursion_limit":
