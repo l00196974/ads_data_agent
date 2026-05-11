@@ -146,8 +146,13 @@ def copy_frontend() -> None:
 
 
 def setup_node_runtime() -> None:
-    archive = download_if_missing(NODE_URL, CACHE / Path(NODE_URL).name)
     target = BUNDLE / "runtime" / "node"
+    # 幂等：bundle 里已有 node.exe 就跳过——PyInstaller 每次重建 dist/ads-agent/，
+    # 但同一次 build 里多个步骤可能都触发到这函数，重复解压浪费时间
+    if (target / "node.exe").exists():
+        log(f"node runtime 已就位，跳过解压: {target}")
+        return
+    archive = download_if_missing(NODE_URL, CACHE / Path(NODE_URL).name)
     if target.exists():
         shutil.rmtree(target)
     log(f"extracting node → {target}")
@@ -155,8 +160,11 @@ def setup_node_runtime() -> None:
 
 
 def setup_python_runtime() -> None:
-    archive = download_if_missing(PYTHON_URL, CACHE / Path(PYTHON_URL).name)
     target = BUNDLE / "runtime" / "python"
+    if (target / "python.exe").exists():
+        log(f"python runtime 已就位，跳过解压: {target}")
+        return
+    archive = download_if_missing(PYTHON_URL, CACHE / Path(PYTHON_URL).name)
     if target.exists():
         shutil.rmtree(target)
     log(f"extracting python → {target}")
@@ -338,7 +346,18 @@ def main() -> int:
         setup_node_runtime()
         setup_python_runtime()
     else:
-        log("skip runtimes")
+        # --skip-runtimes 不能真盲跳——PyInstaller 每次 wipe dist/ads-agent/，
+        # bundle 可能里面根本没 runtime；那就自动恢复别让用户撞 package 校验失败
+        node_missing = not (BUNDLE / "runtime" / "node" / "node.exe").exists()
+        py_missing = not (BUNDLE / "runtime" / "python" / "python.exe").exists()
+        if node_missing or py_missing:
+            log("--skip-runtimes 指定但 runtime 缺失（PyInstaller 重建过 bundle）——自动恢复")
+            if node_missing:
+                setup_node_runtime()
+            if py_missing:
+                setup_python_runtime()
+        else:
+            log("skip runtimes（已就位）")
 
     copy_skills()
     copy_tiktoken_cache()
