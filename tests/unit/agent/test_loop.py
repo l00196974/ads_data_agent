@@ -583,3 +583,52 @@ async def test_error_event_carries_final_messages():
     assert "final_messages" in error_ev
     # 至少含 user message
     assert any(getattr(m, "content", "") == "hi" for m in error_ev["final_messages"])
+
+
+def test_build_openai_messages_includes_reasoning_content():
+    """AIMessage.reasoning_content 必须回填进 openai assistant dict——
+    DeepSeek-R1 / Qwen3-thinking 等 server 端要求'下一轮原样回传 reasoning_content'，
+    否则报 400 'reasoning_content must be passed back to the API'。
+    """
+    from agent.loop import AgentConfig, AgentLoop, AgentState
+    from agent.messages import AIMessage, HumanMessage
+
+    loop = AgentLoop(
+        config=AgentConfig(model="m", system_prompt="sys"),
+        tools=[],
+        middlewares=[],
+    )
+    state = AgentState(
+        messages=[
+            HumanMessage(content="hi"),
+            AIMessage(
+                content="hello",
+                tool_calls=[{"id": "c1", "name": "t", "args": {}, "type": "tool_call"}],
+                reasoning_content="<think>let me check the data</think>",
+            ),
+        ],
+    )
+
+    out = loop._build_openai_messages(state)
+    # out[0] = system_prompt; out[1] = human; out[2] = assistant
+    assistant = out[2]
+    assert assistant["role"] == "assistant"
+    assert assistant["reasoning_content"] == "<think>let me check the data</think>"
+    # 仍然带 tool_calls 不丢
+    assert assistant["tool_calls"][0]["function"]["name"] == "t"
+
+
+def test_build_openai_messages_skips_reasoning_when_none():
+    """非推理模型 reasoning_content=None——assistant dict 不应有这个 key（避免传 null 给不支持的 endpoint）。"""
+    from agent.loop import AgentConfig, AgentLoop, AgentState
+    from agent.messages import AIMessage
+
+    loop = AgentLoop(
+        config=AgentConfig(model="m", system_prompt=""),
+        tools=[],
+        middlewares=[],
+    )
+    state = AgentState(messages=[AIMessage(content="hello")])  # 默认 reasoning_content=None
+    out = loop._build_openai_messages(state)
+    assistant = next(m for m in out if m.get("role") == "assistant")
+    assert "reasoning_content" not in assistant

@@ -44,9 +44,15 @@ class SystemMessage(BaseMessage):
 
 @dataclass
 class AIMessage(BaseMessage):
-    """LLM 输出消息。tool_calls 是 list[dict]，每项 {id, name, args, type}。"""
+    """LLM 输出消息。tool_calls 是 list[dict]，每项 {id, name, args, type}。
+
+    reasoning_content：Qwen3 / DeepSeek-R1 / 火山方舟 thinking 模式的扩展字段。
+    模型把"思考过程"输出到这个字段，**下一轮必须原封不动传回**，否则 API 报
+    `The reasoning_content in the thinking mode must be passed back to the API`。
+    """
     tool_calls: list[dict] = field(default_factory=list)
     name: str | None = None  # 可选——某些链路（subagent 任务名标签等）用
+    reasoning_content: str | None = None
 
 
 @dataclass

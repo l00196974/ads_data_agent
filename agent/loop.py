@@ -211,7 +211,6 @@ class AgentLoop:
                 msg: dict = {"role": "assistant", "content": m.content or ""}
                 tool_calls = getattr(m, "tool_calls", None) or []
                 if tool_calls:
-                    # langchain AIMessage.tool_calls 是 list[dict] 形如 {name, args, id}
                     msg["tool_calls"] = [
                         {
                             "id": tc.get("id"),
@@ -223,6 +222,11 @@ class AgentLoop:
                         }
                         for tc in tool_calls
                     ]
+                # Qwen3 / DeepSeek-R1 等 thinking 模式必须把上一轮的 reasoning_content
+                # 原样回传，否则 server 返 400 "must be passed back to the API"
+                reasoning = getattr(m, "reasoning_content", None)
+                if reasoning:
+                    msg["reasoning_content"] = reasoning
                 out.append(msg)
             elif cls == "ToolMessage":
                 out.append({
@@ -285,8 +289,10 @@ class AgentLoop:
                 accumulated_content += delta.content
                 yield {"type": "token", "delta": delta.content}
             # 推理模型的 reasoning_content 字段（OpenAI 标准之外的扩展）
+            # isinstance str 检查：openai SDK 真返 None 时 None；某些 chunk 类型
+            # auto-attr 可能给非 str（如 mock 的 MagicMock）——只接受 str
             reasoning_delta = getattr(delta, "reasoning_content", None)
-            if reasoning_delta:
+            if reasoning_delta and isinstance(reasoning_delta, str):
                 accumulated_reasoning += reasoning_delta
             if delta.tool_calls:
                 for tc_delta in delta.tool_calls:
@@ -348,10 +354,13 @@ class AgentLoop:
                 len(accumulated_reasoning),
             )
 
-        # 构造 AIMessage（tool_calls 字段是 list[dict] 形）
+        # 构造 AIMessage——reasoning_content 必须存进来，因为 Qwen3/DeepSeek-R1 等
+        # thinking 模式 API 要求"下一轮请求里 assistant message 必须原样回传 reasoning_content"，
+        # 否则 server 返 400 "reasoning_content must be passed back to the API"
         ai_msg = AIMessage(
             content=effective_content,
             tool_calls=[{"id": tc.id, "name": tc.name, "args": tc.args, "type": "tool_call"} for tc in parsed_tool_calls],
+            reasoning_content=accumulated_reasoning or None,
         )
         yield {
             "type": "model_end",

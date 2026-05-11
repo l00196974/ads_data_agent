@@ -40,6 +40,7 @@ def _mk_chunk(*, content=None, tool_calls=None, finish_reason=None, usage=None):
     delta = MagicMock()
     delta.content = content
     delta.tool_calls = tool_calls or None
+    delta.reasoning_content = None  # 显式 None，否则 MagicMock auto-attr 给非 str
     choice = MagicMock()
     choice.delta = delta
     choice.finish_reason = finish_reason

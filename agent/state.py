@@ -63,14 +63,15 @@ logger = logging.getLogger(__name__)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS loop_messages (
-    thread_id    TEXT NOT NULL,
-    seq          INTEGER NOT NULL,
-    role         TEXT NOT NULL,
-    content      TEXT NOT NULL,
-    tool_calls   TEXT,
-    tool_call_id TEXT,
-    name         TEXT,
-    created_at   REAL NOT NULL,
+    thread_id        TEXT NOT NULL,
+    seq              INTEGER NOT NULL,
+    role             TEXT NOT NULL,
+    content          TEXT NOT NULL,
+    tool_calls       TEXT,
+    tool_call_id     TEXT,
+    name             TEXT,
+    reasoning_content TEXT,
+    created_at       REAL NOT NULL,
     PRIMARY KEY (thread_id, seq)
 );
 
@@ -130,8 +131,9 @@ def _message_to_row(message: BaseMessage) -> dict:
         "tool_calls": None,
         "tool_call_id": None,
         "name": None,
+        "reasoning_content": None,
     }
-    # AIMessage 可能含 tool_calls 列表
+    # AIMessage 可能含 tool_calls 列表 + reasoning_content（Qwen3/DeepSeek-R1 thinking 模式）
     if cls == "AIMessage":
         tcs = getattr(message, "tool_calls", None)
         if tcs:
@@ -139,6 +141,9 @@ def _message_to_row(message: BaseMessage) -> dict:
         nm = getattr(message, "name", None)
         if nm:
             row["name"] = nm
+        rc = getattr(message, "reasoning_content", None)
+        if rc:
+            row["reasoning_content"] = rc
     elif cls == "ToolMessage":
         row["tool_call_id"] = getattr(message, "tool_call_id", None)
         row["name"] = getattr(message, "name", None)
@@ -161,6 +166,8 @@ def _row_to_message(row: dict) -> BaseMessage:
                 kwargs["tool_calls"] = json.loads(row["tool_calls"])
             except json.JSONDecodeError:
                 logger.warning("tool_calls JSON parse failed, dropping: %r", row["tool_calls"])
+        if row.get("reasoning_content"):
+            kwargs["reasoning_content"] = row["reasoning_content"]
         if row.get("name"):
             kwargs["name"] = row["name"]
         return AIMessage(**kwargs)
@@ -209,6 +216,12 @@ class ThreadStore:
         # WAL 让多个 reader 不阻塞 writer——和 langgraph 老链路用同一文件能共存
         await self._conn.execute("PRAGMA journal_mode=WAL;")
         await self._conn.executescript(_SCHEMA)
+        # 兼容老 DB：reasoning_content 列是后加的——SQLite ADD COLUMN IF NOT EXISTS
+        # 要 3.35+，老版本兜底用 PRAGMA table_info 检查。先 try-add，已存在就吞错。
+        try:
+            await self._conn.execute("ALTER TABLE loop_messages ADD COLUMN reasoning_content TEXT")
+        except aiosqlite.OperationalError:
+            pass  # column 已存在
         await self._conn.commit()
 
     async def close(self) -> None:
@@ -261,12 +274,13 @@ class ThreadStore:
                 row["tool_calls"],
                 row["tool_call_id"],
                 row["name"],
+                row["reasoning_content"],
                 now,
             ))
         await conn.executemany(
             "INSERT INTO loop_messages "
-            "(thread_id, seq, role, content, tool_calls, tool_call_id, name, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "(thread_id, seq, role, content, tool_calls, tool_call_id, name, reasoning_content, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             rows,
         )
         await conn.commit()
@@ -277,7 +291,7 @@ class ThreadStore:
         """按 seq 升序 load 整个 thread 的 messages。"""
         conn = self._require_conn()
         cur = await conn.execute(
-            "SELECT role, content, tool_calls, tool_call_id, name "
+            "SELECT role, content, tool_calls, tool_call_id, name, reasoning_content "
             "FROM loop_messages WHERE thread_id = ? ORDER BY seq ASC",
             (thread_id,),
         )
@@ -291,6 +305,7 @@ class ThreadStore:
                 "tool_calls": r[2],
                 "tool_call_id": r[3],
                 "name": r[4],
+                "reasoning_content": r[5],
             }))
         return messages
 
@@ -309,12 +324,13 @@ class ThreadStore:
                 row = _message_to_row(msg)
                 rows.append((
                     thread_id, i, row["role"], row["content"],
-                    row["tool_calls"], row["tool_call_id"], row["name"], now,
+                    row["tool_calls"], row["tool_call_id"], row["name"],
+                    row["reasoning_content"], now,
                 ))
             await conn.executemany(
                 "INSERT INTO loop_messages "
-                "(thread_id, seq, role, content, tool_calls, tool_call_id, name, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "(thread_id, seq, role, content, tool_calls, tool_call_id, name, reasoning_content, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 rows,
             )
         await conn.commit()

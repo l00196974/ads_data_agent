@@ -243,3 +243,40 @@ async def test_coexists_with_langgraph_db(tmp_path):
         cur = await conn.execute("SELECT id FROM checkpoints WHERE id = 'lg_test'")
         row = await cur.fetchone()
         assert row is not None and row[0] == "lg_test"
+
+
+@pytest.mark.asyncio
+async def test_reasoning_content_roundtrip(store):
+    """AIMessage.reasoning_content（DeepSeek-R1 / Qwen3-thinking 等推理模型必传字段）持久化 round-trip。"""
+    msgs = [
+        HumanMessage(content="分析下昨天的点击量"),
+        AIMessage(
+            content="昨天点击量 100 万",
+            tool_calls=[{"id": "c1", "name": "query", "args": {}, "type": "tool_call"}],
+            reasoning_content="<think>用户问昨天数据，需要调 query 工具查 click 指标...</think>",
+        ),
+    ]
+    await store.save_messages("t_reason", msgs)
+    loaded = await store.load_messages("t_reason")
+
+    assert len(loaded) == 2
+    ai = loaded[1]
+    assert isinstance(ai, AIMessage)
+    assert ai.content == "昨天点击量 100 万"
+    assert ai.tool_calls[0]["name"] == "query"
+    assert ai.reasoning_content == "<think>用户问昨天数据，需要调 query 工具查 click 指标...</think>"
+
+
+@pytest.mark.asyncio
+async def test_reasoning_content_optional(store):
+    """非推理模型不返 reasoning_content——AIMessage 不带这字段也能正常 save/load。"""
+    msgs = [
+        HumanMessage(content="hi"),
+        AIMessage(content="hello"),
+    ]
+    await store.save_messages("t_no_reason", msgs)
+    loaded = await store.load_messages("t_no_reason")
+
+    assert len(loaded) == 2
+    ai = loaded[1]
+    assert ai.reasoning_content is None  # 默认 None
