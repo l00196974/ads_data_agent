@@ -343,15 +343,16 @@ class AgentLoop:
             len(parsed_tool_calls), (usage or {}).get("output_tokens", 0),
         )
 
-        # 空答兜底：content 空、无 tool_calls，但 reasoning 不空——说明是推理模型
-        # 把全部内容输到了 reasoning_content 字段。把 reasoning 当作 content 给用户，
-        # 至少不要显示"什么都没有"。
+        # 空答兜底：content 空（或仅含空白如 "\n\n"）、无 tool_calls，但 reasoning
+        # 不空——说明是推理模型把全部内容输到了 reasoning_content 字段。
+        # 把 reasoning 当作 content 给用户，至少不要显示"什么都没有"。
+        # 注意用 .strip() 判空——thinking 模式有时只输出 "\n\n" 占位
         effective_content = accumulated_content
-        if not accumulated_content and not parsed_tool_calls and accumulated_reasoning:
+        if not accumulated_content.strip() and not parsed_tool_calls and accumulated_reasoning:
             effective_content = accumulated_reasoning
             logger.warning(
-                "LLM content empty but reasoning_content has %d chars — falling back to reasoning",
-                len(accumulated_reasoning),
+                "LLM content empty/whitespace-only (%d chars) but reasoning_content has %d chars — falling back to reasoning",
+                len(accumulated_content), len(accumulated_reasoning),
             )
 
         # 构造 AIMessage——reasoning_content 必须存进来，因为 Qwen3/DeepSeek-R1 等

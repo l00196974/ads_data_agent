@@ -120,18 +120,17 @@ def make_task_tool(
                 # context_used_pct（那个进度条是主 thread 概念）
                 usage = ev.get("usage") or {}
                 if usage:
+                    # 端到端 TPS = output_tokens / 总耗时秒数（跟 runner_v2._enrich_metrics 口径一致）
                     out_tokens = usage.get("output_tokens") or 0
                     duration_ms = usage.get("duration_ms") or 0
-                    ttft_ms = usage.get("ttft_ms") or 0
-                    gen_ms = max(1, duration_ms - ttft_ms)
                     metrics_payload = {
                         "call_seq": sub_call_seq,
                         "subagent": subagent_type,
                         "model": sub_config.model,
                         **usage,
                     }
-                    if out_tokens > 0 and gen_ms > 0:
-                        metrics_payload["tps"] = out_tokens * 1000 / gen_ms
+                    if out_tokens > 0 and duration_ms > 0:
+                        metrics_payload["tps"] = out_tokens * 1000 / duration_ms
                     try:
                         await channel.send_metrics(metrics_payload)
                     except Exception:

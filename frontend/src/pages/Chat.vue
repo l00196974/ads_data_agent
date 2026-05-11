@@ -73,7 +73,7 @@
             <span v-if="latestMetrics.cache_read_tokens" class="metric-item metric-cache" :title="cacheTitle">
               💾 {{ formatTokens(latestMetrics.cache_read_tokens) }}
             </span>
-            <span v-if="latestMetrics.tps" class="metric-item" :title="`首 token 延迟 ${latestMetrics.ttft_ms || '-'} ms`">
+            <span v-if="latestMetrics.tps" class="metric-item" :title="tpsTitle">
               ⚡ {{ latestMetrics.tps.toFixed(1) }} t/s
             </span>
           </span>
@@ -365,6 +365,15 @@ const cacheTitle = computed(() => {
   const cache = m.cache_read_tokens || 0
   const ratio = m.input_tokens ? (cache * 100 / m.input_tokens).toFixed(0) : 0
   return `本轮 LLM 输入 tokens (含 prompt cache 命中 ${ratio}%)`
+})
+const tpsTitle = computed(() => {
+  const m = latestMetrics.value
+  if (!m || !m.tps) return ''
+  // 端到端口径：输出 tokens / 总耗时（含 thinking + 流式生成）
+  const ttft = m.ttft_ms != null ? `${m.ttft_ms} ms` : '-'
+  const dur = m.duration_ms != null ? `${m.duration_ms} ms` : '-'
+  const out = m.output_tokens != null ? m.output_tokens : '-'
+  return `端到端速度 (output ${out} tokens / 总耗时 ${dur})\n首 token 延迟 ${ttft}`
 })
 const metricsTitleSubagent = computed(() => {
   const m = latestMetrics.value

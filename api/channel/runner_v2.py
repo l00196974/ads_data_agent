@@ -58,10 +58,15 @@ def _enrich_metrics(
     """把 loop 给的原始 usage（含 ttft_ms / duration_ms / cache_read_tokens）补全
     成前端 metrics-bar 需要的完整 schema：算 TPS、context_used_pct、context_trigger。
 
-    - tps = output_tokens / 生成阶段秒数（duration - ttft）。生成不到 1ms 算时给 None
-      让前端隐藏 ⚡ 显示，避免显示 ∞ 或者奇怪数字
-    - context_used_pct: 仅主 Agent（subagent=None）算，子 Agent 跑独立 context 跟主
-      context bar 无关
+    - **tps（端到端）** = output_tokens / 总耗时秒数。这是用户主观感受的速度：
+      "等 N 秒拿到 M token，平均 M/N t/s"。
+      之前算的是 output_tokens / (duration - ttft) = "首 token 后生成阶段速度"，
+      thinking 模式下首 token 延迟很大，gen 阶段很短，会得到 100+ t/s 但实际
+      用户体感只有 10 t/s，对不上。端到端口径跟用户感觉一致。
+      想看"生成阶段瞬时速度"用 output_tokens / (duration_ms - ttft_ms)，前端可
+      自己算。
+    - context_used_pct: 仅主 Agent（subagent=None）算，子 Agent 跑独立 context
+      跟主 context bar 无关
     """
     out = {
         "call_seq": call_seq,
@@ -69,13 +74,11 @@ def _enrich_metrics(
         "model": model,
         **usage,
     }
-    # TPS = output_tokens / 生成阶段秒数（=duration - ttft）
+    # 端到端 TPS = output_tokens / 总耗时秒数
     out_tokens = usage.get("output_tokens") or 0
     duration_ms = usage.get("duration_ms") or 0
-    ttft_ms = usage.get("ttft_ms") or 0
-    gen_ms = max(1, duration_ms - ttft_ms)
-    if out_tokens > 0 and gen_ms > 0:
-        out["tps"] = out_tokens * 1000 / gen_ms
+    if out_tokens > 0 and duration_ms > 0:
+        out["tps"] = out_tokens * 1000 / duration_ms
     # 上下文使用率——只主 Agent 算，子 Agent 不进度条
     if subagent is None and usage.get("input_tokens") and context_trigger:
         out["context_used_pct"] = usage["input_tokens"] * 100.0 / context_trigger
@@ -236,12 +239,14 @@ class AgentRunnerV2:
                 elif ev_type == "complete":
                     latest_ai_message = ev["final_message"]
                     final_messages_from_loop = ev.get("final_messages")
-                    # 空答兜底：如果 LLM 既没流 token 也没工具调用、最终 content 又空，
-                    # 给用户一个明确提示而不是静默关闭。常见原因：
+                    # 空答兜底：content 仅含空白（如 "\n\n"）、又没工具调用 → 给用户明确
+                    # 提示而不是静默关闭。常见原因：
                     # - finish_reason="content_filter"（模型拒答）
-                    # - 推理模型把内容全输到 reasoning_content（loop 已尝试 fallback）
+                    # - 推理模型把内容全输到 reasoning_content（loop 已尝试 fallback；
+                    #   若 fallback 也失败说明 reasoning 也是空）
                     # - 模型 endpoint 配置问题
-                    final_content = getattr(latest_ai_message, "content", "") or ""
+                    final_content_raw = getattr(latest_ai_message, "content", "") or ""
+                    final_content = final_content_raw if isinstance(final_content_raw, str) else str(final_content_raw)
                     final_tool_calls = getattr(latest_ai_message, "tool_calls", None) or []
                     if not final_content.strip() and not final_tool_calls:
                         await channel.send_token(
