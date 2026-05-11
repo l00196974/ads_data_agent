@@ -31,9 +31,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable, Protocol
 
 from agent.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
@@ -42,6 +45,27 @@ from openai import AsyncOpenAI
 from agent.token_breakdown import estimate_breakdown
 
 logger = logging.getLogger(__name__)
+
+
+def _dump_request(messages: list[dict], model: str, step: int, thread_id: str) -> None:
+    """ADS_AGENT_DEBUG_DUMP=1 时把当前 LLM 请求 dump 到 data/debug_dumps/ 供事后分析。
+
+    复现"LLM 返空"问题时设这个 env var 重跑，文件会落到磁盘，对照日志里
+    `model_end: finish_reason=...` 一行能拼出完整故事：发了什么形状的 prompt
+    → LLM 怎么响应的。仅 debug 用，生产别开（消息含敏感数据）。
+    """
+    try:
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S-%f")[:-3]
+        out_dir = Path("data") / "debug_dumps"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / f"req-{thread_id}-step{step}-{ts}.json"
+        out_path.write_text(
+            json.dumps({"model": model, "messages": messages}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        logger.info("debug dump: %s", out_path)
+    except Exception as e:
+        logger.warning("debug dump failed: %s", e)
 
 
 def _read_attr(obj: Any, dotted_path: str) -> Any:
@@ -394,10 +418,29 @@ class AgentLoop:
 
             # 调 LLM 流式
             t_request_start = time.perf_counter()
+            openai_messages = self._build_openai_messages(state)
+
+            # 诊断日志：打 messages 结构摘要（不打内容避免日志爆炸）。
+            # 排查"LLM 返空"时 这条 log + 后面 model_end log 能拼出完整故事：
+            #   "发了什么形状的 prompt" → "LLM 返了什么 finish_reason"
+            roles_summary = {}
+            for m in openai_messages:
+                r = m.get("role", "?")
+                roles_summary[r] = roles_summary.get(r, 0) + 1
+            tool_calls_count = sum(len(m.get("tool_calls") or []) for m in openai_messages if m.get("role") == "assistant")
+            logger.info(
+                "model_start step=%d roles=%s tool_calls_in_history=%d total_msgs=%d",
+                step + 1, dict(roles_summary), tool_calls_count, len(openai_messages),
+            )
+
+            # ADS_AGENT_DEBUG_DUMP=1 → 把完整 messages dump 到磁盘供事后调试
+            if os.environ.get("ADS_AGENT_DEBUG_DUMP", "").lower() in ("1", "true", "yes"):
+                _dump_request(openai_messages, self.config.model, step + 1, state.thread_id)
+
             try:
                 stream = await client.chat.completions.create(
                     model=self.config.model,
-                    messages=self._build_openai_messages(state),
+                    messages=openai_messages,
                     tools=self._tool_schemas() if self.tools else None,
                     stream=True,
                     stream_options={"include_usage": True},  # 让最后一个 chunk 带 usage
