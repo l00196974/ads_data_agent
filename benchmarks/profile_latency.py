@@ -21,7 +21,7 @@ import time
 import uuid
 from pathlib import Path
 
-from langchain_core.messages import HumanMessage
+from agent.messages import HumanMessage
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))

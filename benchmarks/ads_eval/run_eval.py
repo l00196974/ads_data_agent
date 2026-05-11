@@ -32,7 +32,7 @@ import uuid
 from pathlib import Path
 
 import yaml
-from langchain_core.messages import HumanMessage
+from agent.messages import HumanMessage
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
