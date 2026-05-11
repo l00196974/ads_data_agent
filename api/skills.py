@@ -110,5 +110,5 @@ async def create_skill(user_id: str, req: SkillCreateRequest):
     """
     us = UserSpace(user_id, cfg.persistence.data_dir)
     skill_file = us.skills_dir / f"{req.name}.py"
-    skill_file.write_text(f'"""{req.description}"""\n\n{req.code}')
+    skill_file.write_text(f'"""{req.description}"""\n\n{req.code}', encoding="utf-8")
     return {"status": "created", "name": req.name}

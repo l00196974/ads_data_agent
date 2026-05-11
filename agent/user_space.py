@@ -16,12 +16,13 @@ class UserSpace:
             d.mkdir(parents=True, exist_ok=True)
 
     def get_agents_md(self, system_md_path: str = "prompts/system_agent.md") -> str:
+        # 都显式 utf-8 —— Windows 中文系统默认 GBK，读 markdown 含中文会 UnicodeDecodeError
         parts = []
         sys_path = Path(system_md_path)
         if sys_path.exists():
-            parts.append(sys_path.read_text())
+            parts.append(sys_path.read_text(encoding="utf-8"))
         if self.agents_md_path.exists():
-            user_content = self.agents_md_path.read_text().strip()
+            user_content = self.agents_md_path.read_text(encoding="utf-8").strip()
             if user_content:
                 parts.append("\n\n## 用户自定义指令\n" + user_content)
         return "\n\n".join(parts)

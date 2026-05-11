@@ -156,7 +156,9 @@ class AppConfig(BaseModel):
 def load_config(path: str = "config.yaml") -> AppConfig:
     raw = {}
     if Path(path).exists():
-        with open(path) as f:
+        # 显式 utf-8 —— config.yaml 含中文注释；Windows 中文系统默认 GBK，
+        # 不传 encoding 会 UnicodeDecodeError 让 exe 启动崩
+        with open(path, encoding="utf-8") as f:
             raw = yaml.safe_load(f) or {}
 
     raw["llm"] = {
