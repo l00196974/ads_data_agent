@@ -487,45 +487,62 @@ def load_md_skills(
             _ensure_skill_deps(sub)
 
             bin_map = _read_package_bin(sub)
-            if not bin_map:
-                continue
+            # bin_map 可以为空——doc-only skill（只有 SKILL.md，没 package.json::bin
+            # 也没 bin/ 目录）是合法 skill 类型。这种 skill 不注册 run_command 子命令，
+            # 但 SKILL.md 正文进系统 prompt，让 LLM 按它写的规则 / 知识工作。
+            # 用例：业务规则、术语表、分析方法论、风格指南等纯指令性内容。
 
             skill_name = frontmatter.get("name") or sub.name
             skill_desc = (frontmatter.get("description") or "").strip()
 
-            # 注册子命令到全局 registry（用户后来覆盖系统）
+            # 注册子命令到全局 registry（用户后来覆盖系统）。bin_map 空就跳过这步。
             for subcmd, script_path in bin_map.items():
                 commands[subcmd] = script_path
                 workdirs[subcmd] = sub.resolve()
 
-            section = f"### Skill: {skill_name} ({source_tag})\n\n{body}"
+            kind = "executable" if bin_map else "doc-only"
+            section = f"### Skill: {skill_name} ({source_tag}, {kind})\n\n{body}"
             doc_sections.append(section)
 
             summaries.append({
                 "name": skill_name,
                 "description": skill_desc.split("\n\n")[0][:200],
                 "type": "skill_md",
-                "commands": list(bin_map.keys()),
+                "commands": list(bin_map.keys()),  # doc-only 时是 []
                 "source": source_tag,
             })
 
-    if not commands:
+    # 没任何 skill（既无 executable 也无 doc-only） = 完全空 package
+    if not doc_sections:
         return SkillsPackage()
 
-    cmd_list = "\n".join(f"- `{c}`" for c in commands.keys())
-    prompt_addition = (
-        "## 业务技能（通过 `run_command` 工具调用）\n\n"
-        "下列 CLI 子命令已注册。调用方式：\n\n"
-        "```\nrun_command(command=\"<子命令> <参数...>\")\n```\n\n"
-        f"已注册的子命令：\n{cmd_list}\n\n"
-        "完整用法文档（每个 skill 一段，按 CLI 命令分组说明）：\n\n"
+    # 分别拼"业务技能（有 CLI 命令）"和"业务知识 / 规则（doc-only）"段
+    parts = []
+    if commands:
+        cmd_list = "\n".join(f"- `{c}`" for c in commands.keys())
+        parts.append(
+            "## 业务技能（通过 `run_command` 工具调用）\n\n"
+            "下列 CLI 子命令已注册。调用方式：\n\n"
+            "```\nrun_command(command=\"<子命令> <参数...>\")\n```\n\n"
+            f"已注册的子命令：\n{cmd_list}\n"
+        )
+    parts.append(
+        "## 业务规则 / 技能文档\n\n"
+        "下列内容由 SKILL.md 加载，是工作时必须遵循的知识 / 规则 / 方法论。"
+        "doc-only 的 skill 没有 CLI 命令，但 LLM 应当按其描述行事：\n\n"
         + "\n\n---\n\n".join(doc_sections)
     )
+    prompt_addition = "\n\n".join(parts)
 
     artifacts_root_path = Path(artifacts_root) if artifacts_root is not None else None
+    # commands 为空时不注册 run_command 工具——避免 LLM 看到空工具白调一遍
+    tools = (
+        [_make_run_tool_spec(commands, workdirs, user_id=user_id, artifacts_root=artifacts_root_path)]
+        if commands else []
+    )
     return SkillsPackage(
         prompt_addition=prompt_addition,
-        tools=[_make_run_tool_spec(commands, workdirs, user_id=user_id, artifacts_root=artifacts_root_path)],
+        tools=tools,
         summaries=summaries,
     )
 
