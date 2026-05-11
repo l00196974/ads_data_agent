@@ -280,3 +280,32 @@ async def test_reasoning_content_optional(store):
     assert len(loaded) == 2
     ai = loaded[1]
     assert ai.reasoning_content is None  # 默认 None
+
+
+@pytest.mark.asyncio
+async def test_tool_message_json_content_stays_string(store):
+    """工具返回值是 JSON 字符串（如 `{"dataset": ...}`）—— load 时**不**应被
+    反序列化成 dict，否则 _build_openai_messages 会把 dict 塞进 OpenAI content
+    字段，server 返 400 'content should be a string or a list'。
+    """
+    tool_output = '{"dataset": {"dimensions": ["date", "cost"], "source": [["2026-05-10", "100000"]]}, "total": 1}'
+    msg = ToolMessage(content=tool_output, tool_call_id="c1", name="query")
+    await store.save_messages("t_json_tool", [msg])
+    loaded = await store.load_messages("t_json_tool")
+
+    assert len(loaded) == 1
+    # 必须仍是字符串，不能被自动反序列化成 dict
+    assert isinstance(loaded[0].content, str), f"工具 JSON 输出被误解成 {type(loaded[0].content).__name__}"
+    assert loaded[0].content == tool_output
+
+
+@pytest.mark.asyncio
+async def test_curly_brace_string_in_content_not_parsed(store):
+    """HumanMessage / AIMessage content 也可能含 `{` 起始的字符串（如代码片段、
+    用户拷贴的 JSON），同样不应被还原成 dict。"""
+    msg = HumanMessage(content='{"this": "looks like JSON"} 但实际是用户输入的字符串')
+    await store.save_messages("t_str_curly", [msg])
+    loaded = await store.load_messages("t_str_curly")
+
+    assert isinstance(loaded[0].content, str)
+    assert loaded[0].content.startswith('{"this": ')

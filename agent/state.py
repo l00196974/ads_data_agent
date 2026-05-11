@@ -101,14 +101,27 @@ def _content_to_str(content: Any) -> str:
 
 
 def _content_from_str(text: str) -> Any:
-    """读回 content。优先尝试 JSON 解多模态结构，失败按 str 处理。"""
+    """读回 content。
+
+    **只**还原 `[...]` 开头的 JSON 多模态 list；**不**还原 `{...}` 开头的字典。
+    OpenAI content 协议允许 str 或 list[dict]，dict 类型不合法。
+
+    历史 bug：之前也还原 `{...}` → 工具返 JSON 字符串（如 `{"dataset": ...}`）
+    被当多模态字典反序列化 → 下一轮 _build_openai_messages 把 dict 塞进
+    `"content"` 字段 → OpenAI API 拒收 400 `'content should be a string or a list'`。
+
+    防御：解析后用 isinstance 再确认是 list，避免 list-shaped 字符串解析后
+    意外得到非 list。
+    """
     if not text:
         return ""
-    if text.startswith("[") or text.startswith("{"):
+    if text.startswith("["):
         try:
-            return json.loads(text)
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                return parsed
         except json.JSONDecodeError:
-            return text
+            pass
     return text
 
 
