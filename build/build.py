@@ -183,11 +183,19 @@ def setup_python_runtime() -> None:
 
 
 def copy_skills() -> None:
-    """拷源代码 skills/ 到 bundle，但**排除** node_modules / .deps-pip / .deps_installed_hash。
+    """拷源代码 skills/ 到 bundle，**保留** node_modules / .deps-pip / .deps_installed_hash。
 
-    用户首次启动 launcher 时，skill_loader 检测到 hash marker 缺失会自动装依赖
-    （走 bundle 自带的 Node + Python，零外部依赖）。带 node_modules 进 bundle 会让
-    cold install 不被触发，无法验证 auto-install 路径，且 node_modules 通常 50MB+ 浪费空间。
+    以前故意排除这些产物想让接收方"首次启动按需自动装"，但实际效果是接收方一启动
+    就连 registry.npmjs.org / pypi.org 拉包（命中企业防火墙 443 告警 + 离线环境
+    直接挂）。改成"打包时把 hash marker + install 产物一起 ship"，运行期
+    `_ensure_skill_deps` 看 hash 匹配直接跳过 install，零外网连接。
+
+    代价是 bundle 大几十 MB（node_modules 通常 30-50MB/skill）；收益是接收方
+    真正离线启动 + 没首次启动外网告警。
+
+    前提：打包机本地已经跑过 skill 一次（node_modules 已就位），否则 bundle 出
+    去依然空 deps，接收方还是要联网。CI / 自动化打包脚本应该先跑一遍
+    `npm install` 把源码 skills 装好再 build。
     """
     src_root = ROOT / "skills"
     if not src_root.exists():
@@ -198,13 +206,20 @@ def copy_skills() -> None:
         shutil.rmtree(dst_root)
 
     def ignore(_d: str, names: list[str]) -> list[str]:
-        # 不带任何 install 产物 / 缓存进 bundle
-        skip = {"node_modules", ".deps-pip", ".deps_installed_hash",
-                "__pycache__", ".pytest_cache", "package-lock.json"}
+        # 排除：纯缓存（__pycache__）、测试产物（.pytest_cache）；
+        # 保留：node_modules / .deps-pip / .deps_installed_hash（这些是 deps 已装的证据）
+        # package-lock.json 也保留——npm install 时 lock 在能加快解析
+        skip = {"__pycache__", ".pytest_cache"}
         return [n for n in names if n in skip]
 
     shutil.copytree(src_root, dst_root, ignore=ignore)
-    log(f"skills copied (without lock/install artifacts): {dst_root}")
+
+    # 给用户一个"deps 已就位"的可视化反馈
+    has_deps = 0
+    for sub in dst_root.iterdir():
+        if (sub / ".deps_installed_hash").exists():
+            has_deps += 1
+    log(f"skills copied (with install artifacts): {dst_root} ({has_deps} 个 skill 含 hash marker)")
 
 
 def copy_tiktoken_cache() -> None:
