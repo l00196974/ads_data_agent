@@ -197,6 +197,23 @@ def copy_skills() -> None:
     log(f"skills copied (without lock/install artifacts): {dst_root}")
 
 
+def copy_tiktoken_cache() -> None:
+    """拷 vendor/tiktoken_cache/ 到 bundle 根——内网 / 离线环境 tiktoken 不
+    用再从 openaipublic.blob.core.windows.net 下 BPE 文件。launcher.py 启动
+    时把 TIKTOKEN_CACHE_DIR 指向这里。
+    """
+    src = ROOT / "vendor" / "tiktoken_cache"
+    if not src.exists():
+        log("WARN: vendor/tiktoken_cache 不存在——离线环境 tiktoken 会尝试联网下载")
+        return
+    dst = BUNDLE / "vendor" / "tiktoken_cache"
+    if dst.exists():
+        shutil.rmtree(dst)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(src, dst)
+    log(f"tiktoken BPE cache copied: {dst}")
+
+
 def copy_static_files() -> None:
     for fname in ["config.yaml", ".env.example"]:
         src = ROOT / fname
@@ -208,10 +225,13 @@ def copy_static_files() -> None:
     (BUNDLE / "README-INSTALL.txt").write_text(
         "华为广告数据助手 - 离线安装包\n"
         "=" * 40 + "\n\n"
-        "1. 复制 .env.example 为 .env，填入 LLM_API_KEY / LLM_BASE_URL\n"
+        "1. 复制 .env.example 为 .env，填入 LLM_API_KEY / LLM_BASE_URL / LLM_MODEL\n"
         "2. 双击 ads-agent.exe 启动\n"
         "3. 浏览器自动打开 http://127.0.0.1:8000\n\n"
-        "如需修改端口：编辑 .env 添加 ADS_AGENT_PORT=xxxx\n"
+        "修改端口（任选其一，优先级从高到低）：\n"
+        "  a. 环境变量 ADS_AGENT_PORT=xxxx（或写到 .env 里）\n"
+        "  b. 编辑 config.yaml::server.port: xxxx\n"
+        "host 同理：ADS_AGENT_HOST / config.yaml::server.host\n\n"
         "数据目录：./data/（首次运行自动创建）\n",
         encoding="utf-8",
     )
@@ -242,6 +262,7 @@ def main() -> int:
         log("skip runtimes")
 
     copy_skills()
+    copy_tiktoken_cache()
     copy_static_files()
     log(f"bundle ready: {BUNDLE}")
     log(f"size: {sum(f.stat().st_size for f in BUNDLE.rglob('*') if f.is_file()) // 1_000_000} MB")

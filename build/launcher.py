@@ -58,20 +58,77 @@ def _open_browser_when_ready(url: str, delay: float = 1.5) -> None:
     threading.Thread(target=_go, daemon=True).start()
 
 
+def _resolve_host_port(root: Path) -> tuple[str, int]:
+    """端口/host 解析优先级：环境变量 > config.yaml > hardcoded 默认。
+
+    `config.yaml::server.{host,port}` 之前是装饰字段——launcher 只看 ENV——这里
+    补上回落读取，让用户在 bundle 根目录改 yaml 也能生效（不用每次都开 .env）。
+    """
+    # 默认值
+    default_host = "127.0.0.1"
+    default_port = 8000
+
+    # config.yaml 回落（如果存在且可解析）
+    cfg_host: str | None = None
+    cfg_port: int | None = None
+    cfg_path = root / "config.yaml"
+    if cfg_path.exists():
+        try:
+            import yaml  # PyInstaller 已经 collect-all pydantic 间接拉进来
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                raw = yaml.safe_load(f) or {}
+            server = raw.get("server") or {}
+            cfg_host = server.get("host")
+            cfg_port = server.get("port")
+        except Exception:
+            # yaml 坏了别让进程崩——退回 ENV / 默认即可
+            pass
+
+    host = os.getenv("ADS_AGENT_HOST") or cfg_host or default_host
+    # host=0.0.0.0 浏览器打不开，自动改成 127.0.0.1 用于 _open_browser
+    if host == "0.0.0.0":
+        browser_host = "127.0.0.1"
+    else:
+        browser_host = host
+
+    port_env = os.getenv("ADS_AGENT_PORT")
+    if port_env:
+        port = int(port_env)
+    elif cfg_port:
+        port = int(cfg_port)
+    else:
+        port = default_port
+
+    return host, browser_host, port
+
+
+def _setup_tiktoken_cache(root: Path) -> None:
+    """指向 bundle 自带的 BPE 缓存。
+
+    main.py 也 setdefault 了，但它走 `Path(__file__).parent` —— 在 PyInstaller
+    onedir 模式下 __file__ 落到 _internal/ 里，vendor/ 不在那儿，路径会错。这里
+    先于 main 的 setdefault 把环境变量定死，main.py 的 setdefault 就成了 noop。
+    """
+    cache_dir = root / "vendor" / "tiktoken_cache"
+    if cache_dir.exists():
+        os.environ["TIKTOKEN_CACHE_DIR"] = str(cache_dir)
+
+
 def main() -> None:
     root = _bundle_root()
     os.chdir(root)
     _setup_runtime_path(root)
+    _setup_tiktoken_cache(root)
 
-    # 此时 PATH / cwd 已就绪，再 import 业务模块（main.py 会读 config.yaml + .env）。
+    # 此时 PATH / cwd / TIKTOKEN_CACHE_DIR 都就绪，再 import 业务模块（main.py
+    # 会读 config.yaml + .env，且首次 import 链可能触发 tiktoken load）。
     # 直接 import app 对象（不是 "main:app" 字符串）—— PyInstaller 才能顺着 import 链
     # 把 main.py + 它依赖的所有模块打进 PYZ。
     import uvicorn
     from main import app
 
-    host = os.getenv("ADS_AGENT_HOST", "127.0.0.1")
-    port = int(os.getenv("ADS_AGENT_PORT", "8000"))
-    _open_browser_when_ready(f"http://{host}:{port}/")
+    host, browser_host, port = _resolve_host_port(root)
+    _open_browser_when_ready(f"http://{browser_host}:{port}/")
 
     uvicorn.run(app, host=host, port=port, log_level="info")
 
