@@ -104,11 +104,7 @@ def run_pyinstaller() -> None:
         "--name", "ads-agent",
         "--paths", str(ROOT),
         # PyInstaller 自动收集 import 链，但有些包用 importlib.metadata 找资源，要 collect-all
-        "--collect-all", "deepagents",
-        "--collect-all", "langgraph",
-        "--collect-all", "langchain",
-        "--collect-all", "langchain_openai",
-        "--collect-all", "langchain_core",
+        "--collect-all", "langchain_core",   # 仅保留消息数据类（AIMessage / ToolMessage 等）
         "--collect-all", "tiktoken",
         "--collect-all", "tiktoken_ext",
         "--collect-all", "fastapi",
