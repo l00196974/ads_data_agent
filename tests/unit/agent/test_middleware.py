@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
-from langchain_core.messages import (
+from agent.messages import (
     AIMessage,
     HumanMessage,
     SystemMessage,

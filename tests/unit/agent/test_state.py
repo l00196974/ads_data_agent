@@ -18,7 +18,7 @@
 """
 import pytest
 import pytest_asyncio
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from agent.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from agent.state import ThreadStore
 

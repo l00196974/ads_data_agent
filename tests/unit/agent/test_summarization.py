@@ -11,7 +11,7 @@
 from unittest.mock import MagicMock, AsyncMock
 
 import pytest
-from langchain_core.messages import (
+from agent.messages import (
     AIMessage,
     HumanMessage,
     SystemMessage,

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from langchain_core.messages import SystemMessage, ToolMessage
+from agent.messages import SystemMessage, ToolMessage
 
 from agent.loop import AgentState
 

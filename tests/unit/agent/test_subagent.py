@@ -12,7 +12,7 @@
 from unittest.mock import MagicMock
 
 import pytest
-from langchain_core.messages import HumanMessage
+from agent.messages import HumanMessage
 
 from agent.config import SubAgentSpec
 from agent.loop import AgentConfig, AgentLoop, ToolSpec

@@ -22,7 +22,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from agent.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from agent.loop import (
     AgentConfig,

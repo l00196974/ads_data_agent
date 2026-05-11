@@ -1,8 +1,7 @@
 """Pure Python agent loop — 不依赖 deepagents / langchain.agents / langgraph。
 
 替代 `deepagents.create_deep_agent` + `agent.astream_events(v2)` 消费链。
-保留 `langchain_core.messages.{Human/AI/Tool/System}Message` 作为数据载体（这些
-是轻量数据类，没有切走的理由）。
+消息数据类来自 `agent.messages`（自管的 dataclass，替代 langchain_core.messages）。
 
 设计要点：
 1. **直接用 openai SDK** 不走 langchain_openai.ChatOpenAI——少一层包装、流式
@@ -37,7 +36,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Awaitable, Callable, Protocol
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from agent.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from openai import AsyncOpenAI
 
 from agent.token_breakdown import estimate_breakdown
@@ -295,7 +294,7 @@ class AgentLoop:
                 args=args,
             ))
 
-        # 构造 AIMessage（langchain_core 期望 tool_calls 字段是 list[dict] 形）
+        # 构造 AIMessage（tool_calls 字段是 list[dict] 形）
         ai_msg = AIMessage(
             content=accumulated_content,
             tool_calls=[{"id": tc.id, "name": tc.name, "args": tc.args, "type": "tool_call"} for tc in parsed_tool_calls],

@@ -53,7 +53,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import aiosqlite
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from agent.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 
 logger = logging.getLogger(__name__)
 

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from langchain_core.messages import BaseMessage
+from agent.messages import BaseMessage
 
 
 # 进程级 encoder 缓存——每个 model 名字只 load 一次（cl100k_base 几兆，约 100ms）

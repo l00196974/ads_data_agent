@@ -16,7 +16,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from langchain_core.messages import HumanMessage
+from agent.messages import HumanMessage
 
 from agent.loop import AgentState
 

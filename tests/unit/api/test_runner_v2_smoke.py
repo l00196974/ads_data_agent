@@ -13,7 +13,7 @@ from unittest.mock import MagicMock
 
 import pytest
 import pytest_asyncio
-from langchain_core.messages import AIMessage, HumanMessage
+from agent.messages import AIMessage, HumanMessage
 
 from agent.loop import AgentConfig, ToolSpec
 from agent.middleware import DateReminder
@@ -305,7 +305,7 @@ async def test_tool_messages_persisted_to_thread_store(store):
     config = AgentConfig(model="test", system_prompt="sys", recursion_limit=5)
 
     from agent.loop import AgentLoop
-    from langchain_core.messages import ToolMessage
+    from agent.messages import ToolMessage
     orig = AgentLoop._get_client
     AgentLoop._get_client = lambda self: fake_client
     try:

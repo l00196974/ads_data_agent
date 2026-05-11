@@ -30,7 +30,7 @@ from __future__ import annotations
 import logging
 from typing import Any, TYPE_CHECKING
 
-from langchain_core.messages import BaseMessage, SystemMessage
+from agent.messages import BaseMessage, SystemMessage
 
 from agent.loop import AgentState
 

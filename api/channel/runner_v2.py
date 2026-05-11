@@ -27,7 +27,7 @@ import logging
 import time
 from typing import Any
 
-from langchain_core.messages import AIMessage, BaseMessage
+from agent.messages import AIMessage, BaseMessage
 
 from agent.loop import AgentConfig, AgentLoop, ToolCall, ToolSpec
 from agent.skill_loader import extract_artifact_ids_from_output

@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from langchain_core.messages import ToolMessage
+from agent.messages import ToolMessage
 
 from agent.loop import AgentState
 

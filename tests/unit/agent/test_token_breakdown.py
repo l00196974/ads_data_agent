@@ -1,5 +1,5 @@
 """token_breakdown.estimate_breakdown 单测——分桶逻辑 + 兜底行为。"""
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from agent.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from agent.token_breakdown import estimate_breakdown
 
