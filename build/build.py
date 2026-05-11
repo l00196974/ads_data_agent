@@ -325,6 +325,9 @@ def copy_static_files() -> None:
         "  a. 环境变量 ADS_AGENT_PORT=xxxx（或写到 .env 里）\n"
         "  b. 编辑 config.yaml::server.port: xxxx\n"
         "host 同理：ADS_AGENT_HOST / config.yaml::server.host\n\n"
+        "默认浏览器有问题（如 Chrome 报 chrome_elf.dll 错误）：\n"
+        "  在 .env 加 ADS_AGENT_NO_BROWSER=1 关闭自动打开，\n"
+        "  然后手动用别的浏览器（Edge / Firefox）访问终端打印的 URL。\n\n"
         "数据目录：./data/（首次运行自动创建）\n",
         encoding="utf-8",
     )

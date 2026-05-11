@@ -65,7 +65,20 @@ def _open_browser_when_ready(
 
     Why max_wait=60：60s 仍连不上几乎一定是 uvicorn 自己崩了，让用户去看
     终端日志比无脑等强。
+
+    ADS_AGENT_NO_BROWSER=1：完全关掉自动开浏览器。用例：默认浏览器（Chrome）
+    本身有问题（如 chrome_elf.dll 损坏）导致 ShellExecute 弹错误框；用户想
+    用别的浏览器手动访问。
     """
+    no_browser = os.getenv("ADS_AGENT_NO_BROWSER", "").lower() in ("1", "true", "yes")
+    # 醒目地把 URL 印到终端，无论是否自动开浏览器
+    bar = "=" * 60
+    print(f"\n{bar}\n  🚀 ads-agent 启动中... 浏览器地址:\n     {url}\n{bar}\n", flush=True)
+
+    if no_browser:
+        print("[info] ADS_AGENT_NO_BROWSER=1，跳过自动打开浏览器（请手动复制上面 URL）", flush=True)
+        return
+
     import socket as _sock
 
     def _go():
@@ -83,8 +96,10 @@ def _open_browser_when_ready(
             return
         try:
             webbrowser.open(url)
-        except Exception:
-            pass
+        except Exception as e:
+            # webbrowser.open 通常不抛——chrome_elf.dll 损坏等系统层错误是
+            # Chrome 进程自己弹框，我们这边接不到。但 Python 层异常仍兜底。
+            print(f"[warn] 自动打开浏览器失败：{e}。请手动访问上面的 URL。", flush=True)
 
     threading.Thread(target=_go, daemon=True).start()
 
