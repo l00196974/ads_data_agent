@@ -47,14 +47,45 @@ def _setup_runtime_path(root: Path) -> None:
         os.environ["PATH"] = os.pathsep.join(paths_to_prepend + [os.environ.get("PATH", "")])
 
 
-def _open_browser_when_ready(url: str, delay: float = 1.5) -> None:
-    """uvicorn 启动需要 1-2s，等一下再开浏览器避免 'connection refused'。"""
+def _open_browser_when_ready(
+    host: str,
+    port: int,
+    url: str,
+    *,
+    max_wait: float = 60.0,
+    poll_interval: float = 0.3,
+) -> None:
+    """轮询 TCP 端口直到可连再开浏览器——避免冷启动 warmup 期开浏览器拿到
+    'connection refused'。
+
+    Why not fixed sleep：之前是 time.sleep(1.5)，假定 1.5s 内 uvicorn 起来。
+    但首次启动还有 tiktoken BPE load + skill_loader（含 npm install）+
+    ThreadStore SQLite WAL 初始化，可能 5-30s。固定 sleep 太短开早了、太长
+    用户等急。
+
+    Why max_wait=60：60s 仍连不上几乎一定是 uvicorn 自己崩了，让用户去看
+    终端日志比无脑等强。
+    """
+    import socket as _sock
+
     def _go():
-        time.sleep(delay)
+        deadline = time.time() + max_wait
+        # localhost 0.0.0.0 实际监听 — 探测时统一用 127.0.0.1
+        probe_host = "127.0.0.1" if host in ("0.0.0.0", "") else host
+        while time.time() < deadline:
+            try:
+                with _sock.create_connection((probe_host, port), timeout=0.5):
+                    break  # 连上了，跳出循环
+            except (OSError, ConnectionRefusedError):
+                time.sleep(poll_interval)
+        else:
+            # while 跑完没 break = 超时，悄悄放弃开浏览器（用户能从终端日志看到状态）
+            return
         try:
             webbrowser.open(url)
         except Exception:
             pass
+
     threading.Thread(target=_go, daemon=True).start()
 
 
@@ -128,7 +159,7 @@ def main() -> None:
     from main import app
 
     host, browser_host, port = _resolve_host_port(root)
-    _open_browser_when_ready(f"http://{browser_host}:{port}/")
+    _open_browser_when_ready(host, port, f"http://{browser_host}:{port}/")
 
     uvicorn.run(app, host=host, port=port, log_level="info")
 

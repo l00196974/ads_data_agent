@@ -6,13 +6,17 @@
   3. 把 frontend/dist/ 拷到 dist/ads-agent/frontend/
   4. 下载 + 解压 Node portable 到 dist/ads-agent/runtime/node/
   5. 下载 + 解压 Python embeddable 到 dist/ads-agent/runtime/python/
-  6. 拷 config.yaml + .env.example 到 bundle 根
-  7. 写 README-INSTALL.txt 给最终用户
+  6. 拷 vendor/tiktoken_cache 到 bundle（离线环境 tiktoken 必需）
+  7. 拷 config.yaml + .env.example 到 bundle 根
+  8. 写 README-INSTALL.txt 给最终用户
+  9. **清敏感（.env / data/）+ 关键资产校验 + zip → dist/ads-agent-<时间戳>.zip**
+     直接拿这个 zip 发给最终用户
 
 用法：
-  python build/build.py            # 全量打包
-  python build/build.py --skip-runtimes  # 跳过 Node/Python 下载（已下载过）
-  python build/build.py --skip-pyinstaller  # 只更新 runtimes 不重打 PyInstaller
+  python build/build.py                    # 全量打包 + 出分发 zip
+  python build/build.py --skip-runtimes    # 跳过 Node/Python 下载（已下载过）
+  python build/build.py --skip-pyinstaller # 只更新 runtimes 不重打 PyInstaller
+  python build/build.py --skip-package     # dev 迭代时跳过 zip（省 1-2min 压缩）
 
 下载的 archive 缓存在 build/cache/ 下，不会重复下载。
 """
@@ -129,8 +133,11 @@ def run_pyinstaller() -> None:
 def copy_frontend() -> None:
     src = ROOT / "frontend" / "dist"
     if not src.exists():
-        log("WARNING: frontend/dist not found — run `cd frontend && npm run build` first")
-        return
+        # 早失败强约束——bundle 没前端等于双击启动后浏览器全 404，用户排查痛苦
+        raise FileNotFoundError(
+            f"前端构建产物缺失：{src}\n"
+            "请先在 frontend/ 下跑 `npm run build`，或者用 --skip-frontend 显式跳过前端"
+        )
     dst = BUNDLE / "frontend" / "dist"
     if dst.exists():
         shutil.rmtree(dst)
@@ -214,6 +221,72 @@ def copy_tiktoken_cache() -> None:
     log(f"tiktoken BPE cache copied: {dst}")
 
 
+def package_for_distribution() -> None:
+    """打包 bundle 成 zip，给最终用户直接下发。
+
+    分 3 步：
+    1. **清理敏感 / 运行时残留**——build 过程中虽然不会创建 .env 或 data/，
+       但用户如果反复"build → 启动 exe 测试 → 再 build"，data/ 会有上一次跑
+       的会话历史；.env 也可能被人手动放进 bundle 测试。一并清掉避免误带。
+    2. **关键资产校验**——bundle 里少了 frontend/dist / tiktoken_cache /
+       runtime/node 等任意一个，接收方启动都会"看起来正常但浏览器 404 /
+       离线报错 / skill 跑不起来"。早 fail 比晚踩坑好。
+    3. **zip 压缩**——zip 是 Windows 自带能解的格式，无需对方装 7z。
+       压缩级别 6（DEFLATED 默认）—— bundle 300-500MB 通常压到 100-200MB。
+    """
+    import zipfile
+    from datetime import datetime
+
+    # 1. 清理敏感 / 运行时残留
+    for name in [".env", "data"]:
+        target = BUNDLE / name
+        if target.is_file():
+            target.unlink()
+            log(f"removed file: {name}")
+        elif target.is_dir():
+            shutil.rmtree(target)
+            log(f"removed dir:  {name}/")
+
+    # 2. 关键资产校验
+    required = {
+        "ads-agent.exe": "启动入口",
+        "frontend/dist/index.html": "前端构建产物（缺会浏览器 404）",
+        "vendor/tiktoken_cache": "tiktoken BPE 缓存（缺离线环境启动报 openaipublic 网络错）",
+        "runtime/node": "Node 运行时（skill 跑 npm 用）",
+        "runtime/python": "Python 运行时（skill 跑 python 用）",
+        "config.yaml": "运行时配置",
+        ".env.example": "给接收方的模板",
+        "README-INSTALL.txt": "接收方安装说明",
+    }
+    missing = [
+        f"  - {path}  ({label})"
+        for path, label in required.items()
+        if not (BUNDLE / path).exists()
+    ]
+    if missing:
+        raise RuntimeError(
+            "bundle 资产校验失败——接收方会踩坑：\n"
+            + "\n".join(missing)
+            + "\n显式跳过对应 build 步骤的话，用 --skip-package 一并跳过打包"
+        )
+
+    # 3. 压缩
+    stamp = datetime.now().strftime("%Y-%m-%d-%H%M")
+    zip_path = DIST / f"ads-agent-{stamp}.zip"
+    if zip_path.exists():
+        zip_path.unlink()
+    log(f"compressing → {zip_path.name}（这步要 1-2 分钟）")
+
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+        for f in BUNDLE.rglob("*"):
+            if f.is_file():
+                # arcname 含一层 ads-agent/ 前缀，解压后是 ads-agent/ 子目录而非散文件
+                zf.write(f, arcname=f.relative_to(DIST))
+
+    size_mb = zip_path.stat().st_size // 1_000_000
+    log(f"distribution package ready: {zip_path} ({size_mb} MB)")
+
+
 def copy_static_files() -> None:
     for fname in ["config.yaml", ".env.example"]:
         src = ROOT / fname
@@ -242,6 +315,10 @@ def main() -> int:
     parser.add_argument("--skip-pyinstaller", action="store_true")
     parser.add_argument("--skip-runtimes", action="store_true")
     parser.add_argument("--skip-frontend", action="store_true")
+    parser.add_argument(
+        "--skip-package", action="store_true",
+        help="不生成最终的 .zip 分发包（dev 迭代时用，省 1-2 分钟压缩）",
+    )
     args = parser.parse_args()
 
     DIST.mkdir(exist_ok=True)
@@ -266,6 +343,11 @@ def main() -> int:
     copy_static_files()
     log(f"bundle ready: {BUNDLE}")
     log(f"size: {sum(f.stat().st_size for f in BUNDLE.rglob('*') if f.is_file()) // 1_000_000} MB")
+
+    if not args.skip_package:
+        package_for_distribution()
+    else:
+        log("skip package (用 zip + 校验)")
     return 0
 
 
