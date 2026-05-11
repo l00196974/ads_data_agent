@@ -264,22 +264,25 @@ class AgentLoop:
         accumulated_reasoning = ""
 
         async for chunk in stream:
+            # **每个 chunk 都试一遍抓 usage**——OpenAI 官方 stream_options=include_usage
+            # 把 usage 放在尾包（空 choices）；但部分兼容 endpoint（DeepSeek 自托管 /
+            # 火山方舟 CodePlan 等）会放到带 choices 的 chunk 上，或在中间某帧。
+            # 全部 chunk 看一眼，取到非空就覆盖（最后一次写入是最新数据）。
+            if hasattr(chunk, "usage") and chunk.usage:
+                # cache 命中字段——不同厂商命名各异，全试一遍取最大非零值
+                cache_read = (
+                    _read_attr(chunk.usage, "prompt_tokens_details.cached_tokens")
+                    or _read_attr(chunk.usage, "prompt_cache_hit_tokens")
+                    or _read_attr(chunk.usage, "cached_tokens")
+                    or 0
+                )
+                usage = {
+                    "input_tokens": getattr(chunk.usage, "prompt_tokens", 0) or 0,
+                    "output_tokens": getattr(chunk.usage, "completion_tokens", 0) or 0,
+                    "total_tokens": getattr(chunk.usage, "total_tokens", 0) or 0,
+                    "cache_read_tokens": int(cache_read or 0),
+                }
             if not chunk.choices:
-                # 有些厂商把 usage 放在末尾的空 choices chunk 里
-                if hasattr(chunk, "usage") and chunk.usage:
-                    # cache 命中字段——不同厂商命名各异，全试一遍取最大非零值
-                    cache_read = (
-                        _read_attr(chunk.usage, "prompt_tokens_details.cached_tokens")
-                        or _read_attr(chunk.usage, "prompt_cache_hit_tokens")
-                        or _read_attr(chunk.usage, "cached_tokens")
-                        or 0
-                    )
-                    usage = {
-                        "input_tokens": getattr(chunk.usage, "prompt_tokens", 0),
-                        "output_tokens": getattr(chunk.usage, "completion_tokens", 0),
-                        "total_tokens": getattr(chunk.usage, "total_tokens", 0),
-                        "cache_read_tokens": int(cache_read or 0),
-                    }
                 continue
             choice = chunk.choices[0]
             delta = choice.delta
@@ -315,6 +318,27 @@ class AgentLoop:
 
         # 统计耗时——duration_ms 是从请求开始到最后一个 chunk
         duration_ms = int((time.perf_counter() - t_request_start) * 1000)
+
+        # API 没返 usage 时，本地用累积字符长度估算 output——保证前端 metrics-bar
+        # 有数字看，不至于全 None。input_tokens 在 run() 里用 breakdown 估算填补
+        # （那里能拿到 breakdown）。estimated=True 标记让前端能区分"厂商精确" vs
+        # "本地估算"。部分自托管 endpoint（某些 DeepSeek / Qwen 自部署）会无视
+        # stream_options=include_usage，根本不传 usage。
+        if not usage:
+            approx_output_chars = len(accumulated_content) + len(accumulated_reasoning)
+            approx_output_tokens = max(1, approx_output_chars // 2) if approx_output_chars else 0
+            usage = {
+                "input_tokens": 0,  # 待 run() 用 breakdown 填补
+                "output_tokens": approx_output_tokens,
+                "total_tokens": approx_output_tokens,
+                "cache_read_tokens": 0,
+                "estimated": True,
+            }
+            logger.warning(
+                "API 没返 usage（厂商不报 token 数）——本地估算 output≈%d（基于字符长度）",
+                approx_output_tokens,
+            )
+
         if usage:
             usage["ttft_ms"] = ttft_ms or duration_ms  # 工具调用模式下没 token 流，ttft=duration
             usage["duration_ms"] = duration_ms
@@ -468,7 +492,15 @@ class AgentLoop:
             async for ev in self._consume_stream(stream, t_request_start):
                 if ev["type"] == "model_end" and breakdown is not None:
                     # 把 breakdown 合到 usage 里——runner_v2 / subagent 走 **usage 自动透传给 channel
-                    ev.setdefault("usage", {})["breakdown"] = breakdown
+                    usage = ev.setdefault("usage", {})
+                    usage["breakdown"] = breakdown
+                    # API 没返 usage 时，用 breakdown.estimated_total 补 input_tokens
+                    # 让前端能显示数字（标 estimated 区分精确口径）
+                    if usage.get("estimated") and not usage.get("input_tokens"):
+                        est_in = breakdown.get("estimated_total", 0)
+                        if est_in:
+                            usage["input_tokens"] = est_in
+                            usage["total_tokens"] = est_in + (usage.get("output_tokens") or 0)
                 if ev["type"] == "token":
                     yield ev
                 elif ev["type"] == "model_end":

@@ -373,7 +373,8 @@ const tpsTitle = computed(() => {
   const ttft = m.ttft_ms != null ? `${m.ttft_ms} ms` : '-'
   const dur = m.duration_ms != null ? `${m.duration_ms} ms` : '-'
   const out = m.output_tokens != null ? m.output_tokens : '-'
-  return `端到端速度 (output ${out} tokens / 总耗时 ${dur})\n首 token 延迟 ${ttft}`
+  const note = m.estimated ? '\n⚠️ token 数为本地估算（API 未返 usage）' : ''
+  return `端到端速度 (output ${out} tokens / 总耗时 ${dur})\n首 token 延迟 ${ttft}${note}`
 })
 const metricsTitleSubagent = computed(() => {
   const m = latestMetrics.value
