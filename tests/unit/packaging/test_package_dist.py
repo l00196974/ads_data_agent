@@ -47,22 +47,34 @@ def _make_minimal_bundle(bundle: Path) -> None:
     (bundle / "README-INSTALL.txt").write_text("install...\n")
 
 
-def test_strips_env_and_data_dir(build_mod):
-    """.env（含密钥）+ data/（含用户历史）必须从 bundle 剥掉。"""
+def test_preserves_bundle_but_excludes_env_and_data_from_zip(build_mod):
+    """.env / data/ 必须不入 zip，但 BUNDLE 本地保留（用户的测试现场不受打扰）。"""
     mod, dist, bundle = build_mod
     _make_minimal_bundle(bundle)
-    # 故意往里塞敏感文件
+    # 故意往里塞敏感文件 —— 模拟用户本地拷 .env 测试 exe 后又跑 build
     (bundle / ".env").write_text("LLM_API_KEY=secret-key-xyz")
     (bundle / "data").mkdir()
     (bundle / "data" / "checkpoints.db").write_bytes(b"sqlite")
 
     mod.package_for_distribution()
 
-    assert not (bundle / ".env").exists(), "敏感 .env 没被剔除"
-    assert not (bundle / "data").exists(), "运行时 data/ 没被剔除"
-    # 业务文件还在
-    assert (bundle / "ads-agent.exe").exists()
-    assert (bundle / "frontend" / "dist" / "index.html").exists()
+    # 1. BUNDLE 里的 .env / data/ **不该被删**——这是这次修复的核心保证
+    assert (bundle / ".env").exists(), "本地 .env 被误删（破坏用户测试现场）"
+    assert (bundle / "data").exists(), "本地 data/ 被误删"
+    assert (bundle / ".env").read_text() == "LLM_API_KEY=secret-key-xyz", "本地 .env 内容应保留"
+
+    # 2. zip 里**不应有** .env / data/
+    zips = list(dist.glob("ads-agent-*.zip"))
+    assert len(zips) == 1
+    with zipfile.ZipFile(zips[0]) as zf:
+        names = zf.namelist()
+    assert "ads-agent/.env" not in names, "敏感 .env 进了 zip"
+    assert not any(n.startswith("ads-agent/data/") for n in names), "运行时 data/ 进了 zip"
+    # .env.example 必须保留——是给接收方的模板
+    assert "ads-agent/.env.example" in names
+    # 业务文件还在 zip 里
+    assert "ads-agent/ads-agent.exe" in names
+    assert "ads-agent/frontend/dist/index.html" in names
 
 
 def test_raises_when_required_asset_missing(build_mod):

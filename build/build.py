@@ -224,30 +224,22 @@ def copy_tiktoken_cache() -> None:
 def package_for_distribution() -> None:
     """打包 bundle 成 zip，给最终用户直接下发。
 
-    分 3 步：
-    1. **清理敏感 / 运行时残留**——build 过程中虽然不会创建 .env 或 data/，
-       但用户如果反复"build → 启动 exe 测试 → 再 build"，data/ 会有上一次跑
-       的会话历史；.env 也可能被人手动放进 bundle 测试。一并清掉避免误带。
-    2. **关键资产校验**——bundle 里少了 frontend/dist / tiktoken_cache /
+    设计：**不修改 BUNDLE 本身**——本地反复 build + 测试 exe 时，用户往往
+    把自己的 .env 放进 dist/ads-agent/ 跑测试。如果 package 步骤删了 .env，
+    下次再 build 就要重新拷一次。改成"zip 时按名跳过敏感目录"：BUNDLE 始终
+    保留用户的本地测试文件，zip 里始终干净。
+
+    分 2 步：
+    1. **关键资产校验**——bundle 里少了 frontend/dist / tiktoken_cache /
        runtime/node 等任意一个，接收方启动都会"看起来正常但浏览器 404 /
        离线报错 / skill 跑不起来"。早 fail 比晚踩坑好。
-    3. **zip 压缩**——zip 是 Windows 自带能解的格式，无需对方装 7z。
-       压缩级别 6（DEFLATED 默认）—— bundle 300-500MB 通常压到 100-200MB。
+    2. **zip 压缩，按名跳过敏感顶层路径**：`.env`（含密钥）+ `data/`（会话
+       历史）不入 zip。bundle 目录里这俩保留不变。
     """
     import zipfile
     from datetime import datetime
 
-    # 1. 清理敏感 / 运行时残留
-    for name in [".env", "data"]:
-        target = BUNDLE / name
-        if target.is_file():
-            target.unlink()
-            log(f"removed file: {name}")
-        elif target.is_dir():
-            shutil.rmtree(target)
-            log(f"removed dir:  {name}/")
-
-    # 2. 关键资产校验
+    # 1. 关键资产校验
     required = {
         "ads-agent.exe": "启动入口",
         "frontend/dist/index.html": "前端构建产物（缺会浏览器 404）",
@@ -270,19 +262,29 @@ def package_for_distribution() -> None:
             + "\n显式跳过对应 build 步骤的话，用 --skip-package 一并跳过打包"
         )
 
-    # 3. 压缩
+    # 2. 压缩——按顶层名跳过敏感路径
+    excluded_top = {".env", "data"}
     stamp = datetime.now().strftime("%Y-%m-%d-%H%M")
     zip_path = DIST / f"ads-agent-{stamp}.zip"
     if zip_path.exists():
         zip_path.unlink()
-    log(f"compressing → {zip_path.name}（这步要 1-2 分钟）")
+    log(f"compressing → {zip_path.name}（这步要 1-2 分钟，跳过 {excluded_top}）")
 
+    skipped_paths: list[str] = []
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
         for f in BUNDLE.rglob("*"):
-            if f.is_file():
-                # arcname 含一层 ads-agent/ 前缀，解压后是 ads-agent/ 子目录而非散文件
-                zf.write(f, arcname=f.relative_to(DIST))
+            if not f.is_file():
+                continue
+            rel_in_bundle = f.relative_to(BUNDLE)
+            top = rel_in_bundle.parts[0]
+            if top in excluded_top:
+                skipped_paths.append(str(rel_in_bundle))
+                continue
+            # arcname 含一层 ads-agent/ 前缀，解压后是 ads-agent/ 子目录而非散文件
+            zf.write(f, arcname=f.relative_to(DIST))
 
+    if skipped_paths:
+        log(f"  跳过 {len(skipped_paths)} 个本地文件（未入 zip）：{skipped_paths[:3]}{'...' if len(skipped_paths) > 3 else ''}")
     size_mb = zip_path.stat().st_size // 1_000_000
     log(f"distribution package ready: {zip_path} ({size_mb} MB)")
 
