@@ -51,6 +51,12 @@ logger = logging.getLogger(__name__)
 # alias 是为了避开 lint 钩子对 `exec(` 字面量的字面量告警；语义是安全的 list-form 子进程 API
 from asyncio import create_subprocess_exec as _spawn_subprocess
 
+# Windows 子进程 creationflag——GUI 模式（PyInstaller --windowed）启 console 类
+# 子进程（node.exe / python.exe）时，Windows 默认会闪一下 cmd 黑窗。
+# CREATE_NO_WINDOW (0x08000000) 让子进程完全不显示窗口。其它平台没这事——
+# subprocess 在 POSIX 走 fork/exec，不会有什么 GUI 弹窗。
+_WIN_NO_WINDOW_FLAGS = 0x08000000 if sys.platform == "win32" else 0
+
 # pip 装的依赖隔离到 skill 自己的子目录，避免污染全局 site-packages、避免不同 skill 版本冲突。
 # Node 不需要——node 默认从 cwd 往上找 node_modules，cwd 已设为 skill_dir。
 _PIP_DEPS_DIRNAME = ".deps-pip"
@@ -164,6 +170,7 @@ def _ensure_skill_deps(skill_dir: Path) -> None:
                 [npm_path, "install", "--no-audit", "--no-fund"],
                 cwd=str(skill_dir),
                 capture_output=True, text=True, timeout=600, shell=False,
+                creationflags=_WIN_NO_WINDOW_FLAGS,
             )
             if r.returncode != 0:
                 logger.warning(
@@ -194,6 +201,7 @@ def _ensure_skill_deps(skill_dir: Path) -> None:
                  "-r", str(req_txt),
                  "--disable-pip-version-check"],
                 capture_output=True, text=True, timeout=600, shell=False,
+                creationflags=_WIN_NO_WINDOW_FLAGS,
             )
             if r.returncode != 0:
                 logger.warning(
@@ -340,6 +348,7 @@ def _make_run_command_func(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,
+            creationflags=_WIN_NO_WINDOW_FLAGS,
         )
         try:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)

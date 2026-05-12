@@ -207,8 +207,9 @@ def _run_with_webview(app, host: str, port: int, browser_host: str) -> bool:
     """
     try:
         import webview
-    except ImportError:
-        logger.info("pywebview 未安装——回落到默认浏览器模式")
+        logger.info("webview: imported pywebview successfully")
+    except ImportError as e:
+        logger.warning("webview: pywebview 未安装/导入失败 (%s)——回落到默认浏览器", e)
         return False
 
     import threading
@@ -220,14 +221,17 @@ def _run_with_webview(app, host: str, port: int, browser_host: str) -> bool:
     # uvicorn 后台线程跑
     server_thread = threading.Thread(target=server.run, daemon=True)
     server_thread.start()
+    logger.info("webview: uvicorn 后台线程已启动")
 
     # 等端口起来再开窗口——否则 webview 立即 load URL 会拿 connection refused
     bar = "=" * 60
     print(f"\n{bar}\n  🚀 ads-agent 启动中... 等待后端就绪\n     URL: http://{browser_host}:{port}/\n{bar}\n", flush=True)
     if not _wait_for_port(browser_host, port, max_wait=60.0):
+        logger.error("webview: 后端 60s 没起来 → webview 取消")
         print("[error] 后端 60s 没起来——webview 取消，看 data/logs/backend-*.log", flush=True)
         server.should_exit = True
         return False
+    logger.info("webview: 后端端口 %d 就绪，准备创建窗口", port)
 
     try:
         webview.create_window(
@@ -237,11 +241,14 @@ def _run_with_webview(app, host: str, port: int, browser_host: str) -> bool:
             height=800,
             min_size=(800, 600),
         )
+        logger.info("webview: 窗口对象已创建，调 webview.start() 主线程 event loop")
         webview.start()  # 阻塞到窗口关闭
+        logger.info("webview: 主线程 event loop 已退出（窗口关闭）")
         return True
     except Exception as e:
         # WebView2 runtime 缺 / 系统 webview 不可用 → 回落
-        print(f"[warn] PyWebView 启动失败（{e}）——回落开默认浏览器", flush=True)
+        logger.exception("webview: 启动失败——回落开默认浏览器")
+        print(f"[warn] PyWebView 启动失败（{type(e).__name__}: {e}）——回落开默认浏览器", flush=True)
         return False
     finally:
         # 不管 webview 怎么结束，让 uvicorn 也下线
