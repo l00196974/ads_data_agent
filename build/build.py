@@ -347,6 +347,9 @@ def copy_static_files() -> None:
         "  没装时本程序会自动回落到系统默认浏览器模式。\n\n"
         "企业内网 SSL 证书拦截（CERTIFICATE_VERIFY_FAILED）：\n"
         "  在 .env 加 LLM_VERIFY_SSL=false 关掉 SSL 校验绕过。\n\n"
+        "公司代理 504 Gateway Time-out（httpx.ProxyError）：\n"
+        "  系统 HTTP_PROXY 被 httpx 自动用了但代理太慢/拦截了 LLM 域名。\n"
+        "  在 .env 加 LLM_NO_PROXY=1 让 LLM 调用绕过系统代理直连。\n\n"
         "数据目录：./data/（首次运行自动创建）\n",
         encoding="utf-8",
     )

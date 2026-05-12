@@ -178,15 +178,31 @@ class AgentLoop:
             if self.config.base_url:
                 kwargs["base_url"] = self.config.base_url
 
-            # 企业内网 SSL 自签证书拦截场景（Huawei 内网 / 公司 HTTPS 代理）：
-            # PyInstaller bundle 用包内 certifi 不含公司 CA → SSL CERTIFICATE_VERIFY_FAILED。
-            # 设 LLM_VERIFY_SSL=false 关掉 SSL 校验绕过——内网默认安全，OpenAI cert 反正
-            # 被公司代理截掉了，校验也没意义。
+            # 企业内网 SSL / 代理兼容——自定义 httpx 客户端处理两类问题：
+            #
+            # 1. SSL 自签证书拦截：bundle 用包内 certifi 不含公司 CA →
+            #    SSL CERTIFICATE_VERIFY_FAILED。LLM_VERIFY_SSL=false 关 SSL 校验。
+            # 2. 系统 HTTP_PROXY 拖累 LLM 请求：httpx 默认会自动读 HTTP_PROXY /
+            #    HTTPS_PROXY 环境变量走代理。LLM endpoint 在内网时走代理 = 多绕一圈
+            #    （504 timeout 常见）；外网 LLM 走慢代理也容易超时。LLM_NO_PROXY=1
+            #    直接绕过代理，httpx 直连目标。
             verify_env = os.environ.get("LLM_VERIFY_SSL", "").lower()
-            if verify_env in ("false", "0", "no", "off"):
+            no_proxy_env = os.environ.get("LLM_NO_PROXY", "").lower()
+            verify_off = verify_env in ("false", "0", "no", "off")
+            no_proxy = no_proxy_env in ("1", "true", "yes")
+
+            if verify_off or no_proxy:
                 import httpx
-                logger.warning("LLM_VERIFY_SSL=false —— SSL 证书校验已关闭")
-                kwargs["http_client"] = httpx.AsyncClient(verify=False)
+                client_kwargs: dict[str, Any] = {}
+                if verify_off:
+                    logger.warning("LLM_VERIFY_SSL=false —— SSL 证书校验已关闭")
+                    client_kwargs["verify"] = False
+                if no_proxy:
+                    logger.warning("LLM_NO_PROXY=1 —— 绕过系统 HTTP_PROXY/HTTPS_PROXY 直连 LLM")
+                    # httpx 6+ 是 mounts={}，老版本是 trust_env=False；统一用 trust_env
+                    # 把所有 *_PROXY env var 都让 httpx 视而不见
+                    client_kwargs["trust_env"] = False
+                kwargs["http_client"] = httpx.AsyncClient(**client_kwargs)
 
             self._client = AsyncOpenAI(**kwargs)
         return self._client
