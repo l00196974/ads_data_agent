@@ -28,6 +28,16 @@ import time
 import webbrowser
 from pathlib import Path
 
+# PyInstaller --windowed 模式下 sys.stdout / sys.stderr 都是 None（没控制台 → 无法
+# 输出到 tty）。但 uvicorn / 其它库内部会调 sys.stdout.isatty() / .write() 来决定
+# 颜色格式化等——`None.isatty()` 直接 AttributeError 让程序起不来。
+# 在最早的 import 阶段就替换成 os.devnull 写入器，让所有 stdout/stderr 调用安静吞。
+# 真实日志走 agent.log_setup 写到 data/logs/backend-*.log，不靠 stdout。
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w", encoding="utf-8")
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w", encoding="utf-8")
+
 logger = logging.getLogger(__name__)
 
 
