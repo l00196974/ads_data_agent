@@ -103,12 +103,17 @@ class EntityMapper {
         for (const value of valueList) {
           const mappedValue = this.mapDimensionValue(mappedDimension.value, value);
           if (mappedValue.error) {
+            // 优先用 mapper 给的 fuzzy 候选（语义相近）；没找到 fuzzy 就退到 top-6
+            // 字典序候选，让 LLM 至少看到这个维度有哪些合法值可挑
+            const suggestions = (mappedValue.fuzzySuggestions && mappedValue.fuzzySuggestions.length)
+              ? mappedValue.fuzzySuggestions
+              : this.getSuggestionsForDimensionValue(mappedDimension.value);
             result.errors.push({
               field: 'filter_value',
               dimension: mappedDimension.value,
               value,
               message: `维度 "${mappedDimension.value}" 的值 "${value}" 无法识别`,
-              suggestions: this.getSuggestionsForDimensionValue(mappedDimension.value),
+              suggestions,
             });
             continue;
           }
@@ -135,16 +140,20 @@ class EntityMapper {
   mapMetric(input) {
     const target = normalize(input);
 
-    // 第一遍：精确匹配（code / name / alias）。
-    // 拆两阶段是为了避免边扫边 return 导致 fuzzy 抢在精确匹配之前命中——
-    // 实测过 mediaName=HUAWEI Browser 被前一行 desc 含同样字符的"华为浏览器"
-    // fuzzy 截走的 bug。
+    // 三遍扫描，优先级 code/name 精确 > alias > fuzzy。
+    // alias 检查**必须晚于全表 code/name 精确扫**——否则 row 1 的 alias 会抢跑
+    // row 2 的精确 code/name 匹配（参考 mapDimensionValue 注释里华为浏览器案例）。
+
+    // 第 1 遍：metric_code / metric_name 精确匹配
     for (const row of this.metricsConfig) {
       if (normalize(row.metric_code) === target || normalize(row.metric_name) === target) {
         return { value: row.metric_code };
       }
-      // 读 CSV 的 metric_aliases 列（逗号或全角逗号分隔）—— 单一数据源，
-      // 别名在 CSV 里更新即生效，不再依赖代码里 hardcoded 的 alias 表。
+    }
+
+    // 第 2 遍：metric_aliases 匹配（CSV 列，逗号或全角逗号分隔——
+    // 单一数据源，别名在 CSV 里更新即生效，不再依赖代码里 hardcoded 的 alias 表）
+    for (const row of this.metricsConfig) {
       const aliases = String(row.metric_aliases || '')
         .split(/[,，]/)
         .map((a) => normalize(a))
@@ -154,7 +163,7 @@ class EntityMapper {
       }
     }
 
-    // 第二遍：模糊匹配（仅在精确未命中时启用）
+    // 第 3 遍：模糊匹配（精确 + alias 都未命中时启用）
     for (const row of this.metricsConfig) {
       if (fuzzyContains(target, row.metric_name)) {
         return { value: row.metric_code };
@@ -199,13 +208,24 @@ class EntityMapper {
       return { value: aliasMap[input] };
     }
 
-    // 第一遍：精确匹配
+    // 三遍扫描，优先级 code/name 精确 > dimension_aliases > fuzzy。
+    // 第 1 遍：code / name 精确
     for (const row of this.dimensionsConfig) {
       if (normalize(row.dimension_code) === target || normalize(row.dimension_name) === target) {
         return { value: row.dimension_code };
       }
     }
-    // 第二遍：fuzzy
+    // 第 2 遍：dimension_aliases 列（避免 row 1 alias 抢跑 row 2 code/name 精确匹配）
+    for (const row of this.dimensionsConfig) {
+      const aliases = String(row.dimension_aliases || '')
+        .split(/[,，]/)
+        .map((a) => normalize(a))
+        .filter(Boolean);
+      if (aliases.includes(target)) {
+        return { value: row.dimension_code };
+      }
+    }
+    // 第 3 遍：fuzzy
     for (const row of this.dimensionsConfig) {
       if (fuzzyContains(target, row.dimension_name)) {
         return { value: row.dimension_code };
@@ -219,33 +239,44 @@ class EntityMapper {
     const target = normalize(input);
     const candidates = this.dimensionValuesConfig.filter((row) => row.dimension_code === dimensionCode);
 
-    // 第一遍：精确匹配（value / value_desc / aliases）。
-    // **必须先精确扫完整张表再 fuzzy** —— 否则前面行的 desc 可能含其他行的
-    // 真实 value（如 mediaName 第一行 desc 含 "HUAWEI Browser"），把后面的
-    // 精确匹配劫走。
+    // **职责单一：只做精确校验，不做别名翻译/群组扩展**。
+    // 业务背景：脏数据下同一实体多名（华为浏览器 / HUAWEI Browser）的合并查询
+    // **不在这里做**——它是 LLM 的策略选择，由 LLM 通过 search-dimension-values
+    // 拿到候选别名后显式 `IN` 多值传入。query-metrics 做精确校验，校验不过时
+    // 错误信息里用 fuzzy 把候选列出，给 LLM 自己纠错的钩子。
+    //
+    // 优先级 value/value_desc 精确 > alias 精确：
+    // alias 必须晚于全表 value 精确扫——否则 row 1 的 alias 会抢跑 row 2 的
+    // 精确 value 匹配（华为浏览器/HUAWEI Browser 案例）。
+    const parseAliases = (raw) =>
+      String(raw || '').split(/[,，]/).map((v) => normalize(v)).filter(Boolean);
+
+    // 第 1 遍：value / value_desc 精确
     for (const row of candidates) {
       if (normalize(row.value) === target || normalize(row.value_desc) === target) {
         return { valueCode: row.value, valueName: row.value_desc };
       }
-
-      const aliases = String(row.value_aliases || '')
-        .split(',')
-        .map((value) => normalize(value))
-        .filter(Boolean);
-
-      if (aliases.includes(target)) {
-        return { valueCode: row.value, valueName: row.value_desc };
-      }
     }
-
-    // 第二遍：fuzzy（仅在精确未命中时启用）
+    // 第 2 遍：value_aliases 精确
     for (const row of candidates) {
-      if (fuzzyContains(target, row.value_desc)) {
+      if (parseAliases(row.value_aliases).includes(target)) {
         return { valueCode: row.value, valueName: row.value_desc };
       }
     }
 
-    return { error: true };
+    // 精确未命中——用 fuzzy 找候选返给 caller 当 suggestions
+    const fuzzyMatches = [];
+    for (const row of candidates) {
+      if (fuzzyContains(target, row.value_desc) || fuzzyContains(target, row.value)) {
+        fuzzyMatches.push(`${row.value} (${row.value_desc || ''})`);
+        if (fuzzyMatches.length >= 6) break;
+      }
+    }
+
+    return {
+      error: true,
+      fuzzySuggestions: fuzzyMatches,
+    };
   }
 
   getSuggestionsForMetric() {
