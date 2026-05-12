@@ -165,6 +165,19 @@ def setup_python_runtime() -> None:
     if (target / "python.exe").exists():
         log(f"python runtime 已就位，跳过解压: {target}")
         return
+
+    # cache 里有"完整 bootstrap 完毕"的 python runtime 快照？直接整目录复制。
+    # 这步省的是 get-pip.py 每次从 PyPI 重下 pip wheel（约 1.8MB + 网络往返），
+    # 也省 site-packages/pip/ 的解压安装时间。PyInstaller 每次 wipe bundle 重建
+    # 时，python.exe 没了但 pip 配置不会变，缓存复用安全。
+    ready_cache = CACHE / f"python-runtime-{PYTHON_VERSION}-ready"
+    if ready_cache.exists():
+        log(f"从 cache 恢复 python runtime（含 pip 已 bootstrap）: {ready_cache.name}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(ready_cache, target)
+        return
+
+    # 首次 build：解压 zip + 启用 site + bootstrap pip + 落 cache
     archive = download_if_missing(PYTHON_URL, CACHE / Path(PYTHON_URL).name)
     if target.exists():
         shutil.rmtree(target)
@@ -178,14 +191,18 @@ def setup_python_runtime() -> None:
         if new_text != text:
             pth.write_text(new_text, encoding="utf-8")
             log(f"enabled site in {pth.name}")
-    # bootstrap pip
+    # bootstrap pip（首次跑会从 PyPI 下 pip wheel；下次走 cache 不用再下）
     get_pip = CACHE / "get-pip.py"
     if not get_pip.exists():
         log("downloading get-pip.py")
         urllib.request.urlretrieve("https://bootstrap.pypa.io/get-pip.py", get_pip)
     py_exe = target / "python.exe"
-    log("bootstrap pip into bundled python")
+    log("bootstrap pip into bundled python (首次会从 PyPI 下载 ~1.8MB pip wheel)")
     subprocess.check_call([str(py_exe), str(get_pip), "--no-warn-script-location"])
+
+    # 落 cache 让后续 build 秒拷
+    log(f"snapshot python runtime → cache: {ready_cache.name}")
+    shutil.copytree(target, ready_cache)
 
 
 def copy_skills() -> None:
