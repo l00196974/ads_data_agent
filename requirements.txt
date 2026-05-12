@@ -12,3 +12,7 @@ pydantic>=2.0
 
 # Utils
 tiktoken>=0.7         # 上下文 breakdown 估算（runner_v2 / channel 报 metrics 用）
+
+# Desktop window（可选——bundle 启动用 PyWebView 弹原生窗口，避开系统浏览器损坏）
+# Windows 用 Edge WebView2 内核（Win10/11 默认装；老 Win10 需要装 WebView2 runtime）
+pywebview

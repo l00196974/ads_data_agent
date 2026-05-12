@@ -86,8 +86,8 @@ def unzip_to(zip_path: Path, target: Path, strip_root: str | None = None) -> Non
                     shutil.copyfileobj(src, dst)
 
 
-def run_pyinstaller() -> None:
-    log("running PyInstaller")
+def run_pyinstaller(windowed: bool = False) -> None:
+    log(f"running PyInstaller (mode={'windowed' if windowed else 'console'})")
     pyi = ROOT / ".venv" / "Scripts" / "pyinstaller.exe"
     if not pyi.exists():
         raise FileNotFoundError(f"pyinstaller not found at {pyi} — run pip install pyinstaller")
@@ -105,6 +105,8 @@ def run_pyinstaller() -> None:
         "--paths", str(ROOT),
         # PyInstaller 自动收集 import 链，但有些包用 importlib.metadata 找资源，要 collect-all
         "--collect-all", "tiktoken",
+        "--collect-all", "webview",       # PyWebView 桌面窗口 + 平台后端（Windows: Edge WebView2）
+        "--collect-all", "clr_loader",    # pythonnet 依赖 —— Windows 上 webview 走 .NET CLR
         "--collect-all", "tiktoken_ext",
         "--collect-all", "fastapi",
         "--collect-all", "starlette",
@@ -114,8 +116,10 @@ def run_pyinstaller() -> None:
         # PyInstaller 会顺 import 链打包。prompts/ 是运行时按文件路径读的资源，
         # 必须 add-data 显式带进去。
         "--add-data", f"{ROOT / 'prompts'};prompts",
-        # console=True：保留 stdout 窗口，便于调试；正式发布时可换 windowed
-        "--console",
+        # --console: 双击 exe 时会弹黑色控制台窗口（调试模式，看 uvicorn 日志方便）
+        # --windowed: 不弹黑窗，看起来是干净的 desktop app（生产模式）
+        #             崩了找 data/logs/backend-*.log 看
+        "--windowed" if windowed else "--console",
         "--distpath", str(DIST),
         "--workpath", str(BUILD_DIR / "_pyi-build"),
         "--specpath", str(BUILD_DIR / "_pyi-spec"),
@@ -320,14 +324,19 @@ def copy_static_files() -> None:
         "=" * 40 + "\n\n"
         "1. 复制 .env.example 为 .env，填入 LLM_API_KEY / LLM_BASE_URL / LLM_MODEL\n"
         "2. 双击 ads-agent.exe 启动\n"
-        "3. 浏览器自动打开 http://127.0.0.1:8000\n\n"
+        "3. 自动弹出应用窗口（用 Edge WebView2 内核，不依赖 Chrome）\n\n"
+        "启动模式三选一（默认走 desktop 窗口）：\n"
+        "  - 默认                   : 弹应用窗口（推荐）\n"
+        "  - ADS_AGENT_NO_WEBVIEW=1 : 改用系统默认浏览器打开\n"
+        "  - ADS_AGENT_NO_BROWSER=1 : 纯后端，手动用浏览器访问终端打印的 URL\n\n"
         "修改端口（任选其一，优先级从高到低）：\n"
         "  a. 环境变量 ADS_AGENT_PORT=xxxx（或写到 .env 里）\n"
         "  b. 编辑 config.yaml::server.port: xxxx\n"
         "host 同理：ADS_AGENT_HOST / config.yaml::server.host\n\n"
-        "默认浏览器有问题（如 Chrome 报 chrome_elf.dll 错误）：\n"
-        "  在 .env 加 ADS_AGENT_NO_BROWSER=1 关闭自动打开，\n"
-        "  然后手动用别的浏览器（Edge / Firefox）访问终端打印的 URL。\n\n"
+        "WebView2 没装（少数老 Win10）：\n"
+        "  访问 https://developer.microsoft.com/microsoft-edge/webview2/\n"
+        "  下载 Evergreen Bootstrapper 安装一次即可（~5MB）。\n"
+        "  没装时本程序会自动回落到系统默认浏览器模式。\n\n"
         "数据目录：./data/（首次运行自动创建）\n",
         encoding="utf-8",
     )
@@ -342,13 +351,18 @@ def main() -> int:
         "--skip-package", action="store_true",
         help="不生成最终的 .zip 分发包（dev 迭代时用，省 1-2 分钟压缩）",
     )
+    parser.add_argument(
+        "--windowed", action="store_true",
+        help="生产模式：双击 exe 不弹黑色控制台，干净的 desktop app 形态（"
+             "崩了从 data/logs/backend-*.log 看日志）",
+    )
     args = parser.parse_args()
 
     DIST.mkdir(exist_ok=True)
     CACHE.mkdir(exist_ok=True, parents=True)
 
     if not args.skip_pyinstaller:
-        run_pyinstaller()
+        run_pyinstaller(windowed=args.windowed)
     else:
         log("skip PyInstaller")
 
