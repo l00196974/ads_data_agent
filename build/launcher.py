@@ -255,6 +255,69 @@ def _run_with_webview(app, host: str, port: int, browser_host: str) -> bool:
         server.should_exit = True
 
 
+def _run_with_tray_and_browser(app, host: str, port: int, browser_host: str) -> None:
+    """浏览器回落模式 + 系统托盘退出按钮。
+
+    --windowed 模式下没控制台窗口，浏览器关掉后 uvicorn 还在后台跑——用户
+    没地方关，只能去任务管理器杀进程。这里加 system tray 图标，右键菜单
+    "退出"让用户优雅退出。
+
+    托盘失败时回落到纯 uvicorn.run（行为跟老版本一致）。
+    """
+    try:
+        import pystray
+        from PIL import Image, ImageDraw
+    except ImportError as e:
+        logger.warning("tray: pystray/Pillow 没装，回落纯 uvicorn 运行（关程序得任务管理器）：%s", e)
+        _open_browser_when_ready(host, port, f"http://{browser_host}:{port}/")
+        import uvicorn as _uv
+        _uv.run(app, host=host, port=port, log_level="info")
+        return
+
+    import threading
+    import uvicorn
+    import webbrowser as _wb
+
+    config = uvicorn.Config(app, host=host, port=port, log_level="info")
+    server = uvicorn.Server(config)
+    server_thread = threading.Thread(target=server.run, daemon=True)
+    server_thread.start()
+
+    if not _wait_for_port(browser_host, port, max_wait=60.0):
+        logger.error("tray: 后端 60s 没起来")
+        return
+
+    url = f"http://{browser_host}:{port}/"
+    _wb.open(url)
+
+    # 画一个最简的 64x64 蓝色圆图标——避免要 ship .ico 文件
+    img = Image.new("RGB", (64, 64), color=(30, 100, 200))
+    draw = ImageDraw.Draw(img)
+    draw.ellipse((8, 8, 56, 56), fill=(255, 255, 255))
+    draw.text((20, 18), "A", fill=(30, 100, 200))
+
+    def _on_open(_icon, _item):
+        _wb.open(url)
+
+    def _on_quit(icon, _item):
+        logger.info("tray: 用户点退出")
+        server.should_exit = True
+        icon.stop()
+
+    icon = pystray.Icon(
+        "ads-agent",
+        img,
+        "华为广告数据助手",
+        menu=pystray.Menu(
+            pystray.MenuItem("打开页面", _on_open, default=True),
+            pystray.MenuItem("退出", _on_quit),
+        ),
+    )
+    logger.info("tray: 托盘图标已创建，主线程进入 event loop")
+    icon.run()  # 阻塞——直到 _on_quit 调 icon.stop()
+    logger.info("tray: event loop 已退出，等 uvicorn 下线")
+
+
 def main() -> None:
     root = _bundle_root()
     os.chdir(root)
@@ -277,9 +340,9 @@ def main() -> None:
 
     # 启动模式三选一：
     # 1. ADS_AGENT_NO_BROWSER=1 → 纯后端，用户手动开浏览器（控制台跑模式）
-    # 2. ADS_AGENT_NO_WEBVIEW=1 → 后端 + 自动开系统默认浏览器（老行为）
+    # 2. ADS_AGENT_NO_WEBVIEW=1 → 后端 + 系统默认浏览器 + 托盘图标
     # 3. 默认 → 后端 + PyWebView 内嵌窗口（desktop app 形态）
-    #    PyWebView 失败时自动回落到模式 2
+    #    PyWebView 失败时自动回落到模式 2（带托盘）
     no_browser = os.getenv("ADS_AGENT_NO_BROWSER", "").lower() in ("1", "true", "yes")
     no_webview = os.getenv("ADS_AGENT_NO_WEBVIEW", "").lower() in ("1", "true", "yes")
 
@@ -295,11 +358,11 @@ def main() -> None:
         # 默认走 PyWebView 内嵌窗口
         if _run_with_webview(app, host, port, browser_host):
             return  # webview 正常关闭，整个程序结束
-        # webview 失败（如 WebView2 缺）→ 落到默认浏览器模式
+        # webview 失败（如 WebView2 缺）→ 落到浏览器 + 托盘模式
 
-    # 默认浏览器模式（NO_WEBVIEW=1 或 webview 启动失败的兜底）
-    _open_browser_when_ready(host, port, f"http://{browser_host}:{port}/")
-    uvicorn.run(app, host=host, port=port, log_level="info")
+    # 浏览器 + 托盘模式（NO_WEBVIEW=1 或 webview 启动失败的兜底）
+    # 关键：托盘图标给用户提供退出按钮，避免 --windowed 下没地方关程序
+    _run_with_tray_and_browser(app, host, port, browser_host)
 
 
 if __name__ == "__main__":

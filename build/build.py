@@ -107,6 +107,8 @@ def run_pyinstaller(windowed: bool = False) -> None:
         "--collect-all", "tiktoken",
         "--collect-all", "webview",       # PyWebView 桌面窗口 + 平台后端（Windows: Edge WebView2）
         "--collect-all", "clr_loader",    # pythonnet 依赖 —— Windows 上 webview 走 .NET CLR
+        "--collect-all", "pystray",       # 系统托盘图标（webview 回落浏览器时用）
+        "--collect-all", "PIL",           # Pillow——托盘图标渲染
         "--collect-all", "tiktoken_ext",
         "--collect-all", "fastapi",
         "--collect-all", "starlette",
