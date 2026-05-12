@@ -177,6 +177,17 @@ class AgentLoop:
                 kwargs["api_key"] = self.config.api_key
             if self.config.base_url:
                 kwargs["base_url"] = self.config.base_url
+
+            # 企业内网 SSL 自签证书拦截场景（Huawei 内网 / 公司 HTTPS 代理）：
+            # PyInstaller bundle 用包内 certifi 不含公司 CA → SSL CERTIFICATE_VERIFY_FAILED。
+            # 设 LLM_VERIFY_SSL=false 关掉 SSL 校验绕过——内网默认安全，OpenAI cert 反正
+            # 被公司代理截掉了，校验也没意义。
+            verify_env = os.environ.get("LLM_VERIFY_SSL", "").lower()
+            if verify_env in ("false", "0", "no", "off"):
+                import httpx
+                logger.warning("LLM_VERIFY_SSL=false —— SSL 证书校验已关闭")
+                kwargs["http_client"] = httpx.AsyncClient(verify=False)
+
             self._client = AsyncOpenAI(**kwargs)
         return self._client
 
