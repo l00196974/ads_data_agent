@@ -5,14 +5,15 @@
      这样 subprocess.Popen 启动 SKILL.md::package.json::bin 脚本时能找到自带的解释器。
   2. 切到 bundle 目录（_MEIPASS 在 onedir 模式下是 bundle 根，跟 .exe 同级）。
   3. 起 uvicorn 后台线程，挂 main:app。
-  4. **默认开 PyWebView 内嵌窗口**（Windows 用 Edge WebView2 内核，零依赖系统
-     浏览器，规避 Chrome 损坏 / chrome_elf.dll 等问题）。WebView2 不可用时
-     回落到默认浏览器。
+  4. **默认开系统浏览器**（最稳——复制 / 右键 / 快捷键全原生）+ 系统托盘
+     图标（"退出"按钮防止用户找不到关程序入口）。
+     PyWebView 内嵌窗口改为 opt-in（webview 在文本选择、右键菜单、快捷键
+     都有 UX 限制，不再当默认）。
 
-启动模式三选一（按优先级从高到低）：
-  - ADS_AGENT_NO_BROWSER=1 → 纯后端控制台模式（无窗口）
-  - ADS_AGENT_NO_WEBVIEW=1 → 后端 + 系统默认浏览器（老行为）
-  - 默认                  → 后端 + PyWebView 内嵌窗口（desktop app 形态）
+启动模式（按优先级从高到低）：
+  - ADS_AGENT_NO_BROWSER=1 → 纯后端控制台（无窗口）
+  - ADS_AGENT_USE_WEBVIEW=1 → 内嵌 PyWebView 窗口（备选，不推荐）
+  - 默认                  → 系统默认浏览器 + 托盘图标（首选）
 
 为什么要单独搞个 launcher.py 而不是直接打 main.py：
   - main.py 在 import 阶段就读 .env / config.yaml，路径和 PATH 没准备好就崩；
@@ -346,13 +347,13 @@ def main() -> None:
 
     host, browser_host, port = _resolve_host_port(root)
 
-    # 启动模式三选一：
-    # 1. ADS_AGENT_NO_BROWSER=1 → 纯后端，用户手动开浏览器（控制台跑模式）
-    # 2. ADS_AGENT_NO_WEBVIEW=1 → 后端 + 系统默认浏览器 + 托盘图标
-    # 3. 默认 → 后端 + PyWebView 内嵌窗口（desktop app 形态）
-    #    PyWebView 失败时自动回落到模式 2（带托盘）
+    # 启动模式（默认浏览器 + 托盘，webview 改为 opt-in）：
+    # 1. ADS_AGENT_NO_BROWSER=1 → 纯后端控制台（无窗口，用户手动开浏览器）
+    # 2. ADS_AGENT_USE_WEBVIEW=1 → 内嵌 PyWebView 窗口（desktop app 形态，
+    #    但有 easy_drag 文本选择 / 右键菜单 / DevTools 等限制——不推荐，留作备选）
+    # 3. 默认 → 系统默认浏览器 + 系统托盘图标（最稳，复制 / 右键 / 快捷键全原生）
     no_browser = os.getenv("ADS_AGENT_NO_BROWSER", "").lower() in ("1", "true", "yes")
-    no_webview = os.getenv("ADS_AGENT_NO_WEBVIEW", "").lower() in ("1", "true", "yes")
+    use_webview = os.getenv("ADS_AGENT_USE_WEBVIEW", "").lower() in ("1", "true", "yes")
 
     if no_browser:
         # 控制台模式——只起 uvicorn，不开任何窗口
@@ -362,14 +363,15 @@ def main() -> None:
         uvicorn.run(app, host=host, port=port, log_level="info")
         return
 
-    if not no_webview:
-        # 默认走 PyWebView 内嵌窗口
+    if use_webview:
+        # opt-in 走 PyWebView 内嵌窗口（默认不走这条——webview 复制等 UX 限制太多）
         if _run_with_webview(app, host, port, browser_host):
             return  # webview 正常关闭，整个程序结束
         # webview 失败（如 WebView2 缺）→ 落到浏览器 + 托盘模式
+        logger.warning("webview 启动失败，回落到浏览器 + 托盘模式")
 
-    # 浏览器 + 托盘模式（NO_WEBVIEW=1 或 webview 启动失败的兜底）
-    # 关键：托盘图标给用户提供退出按钮，避免 --windowed 下没地方关程序
+    # 默认：系统浏览器 + 托盘
+    # 托盘图标给用户提供退出按钮，避免 --windowed 下没地方关程序
     _run_with_tray_and_browser(app, host, port, browser_host)
 
 
