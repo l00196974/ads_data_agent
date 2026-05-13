@@ -240,6 +240,10 @@ def _run_with_webview(app, host: str, port: int, browser_host: str) -> bool:
             width=1280,
             height=800,
             min_size=(800, 600),
+            # easy_drag 默认 True：让用户拖窗口任何空白处可以移动整个窗口。
+            # 副作用：鼠标在文本上的拖选事件被劫持去拖窗口——**文本无法选中**。
+            # 关掉这个让正常的文本选择行为回来（用户报"无法选中复制对话内容"）。
+            easy_drag=False,
         )
         logger.info("webview: 窗口对象已创建，调 webview.start() 主线程 event loop")
         # debug=True 启用 WebView2 右键菜单（复制/粘贴等）+ F12 dev tools。
