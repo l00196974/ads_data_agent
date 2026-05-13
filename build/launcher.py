@@ -242,7 +242,11 @@ def _run_with_webview(app, host: str, port: int, browser_host: str) -> bool:
             min_size=(800, 600),
         )
         logger.info("webview: 窗口对象已创建，调 webview.start() 主线程 event loop")
-        webview.start()  # 阻塞到窗口关闭
+        # debug=True 启用 WebView2 右键菜单（复制/粘贴等）+ F12 dev tools。
+        # 用户反馈"无法选择复制对话内容"——PyWebView 默认非 debug 时禁用 WebView2
+        # 右键菜单。这个开关也启用 dev tools，但 desktop app 场景下不是安全
+        # 问题（bundle 本就能解包看源码）。
+        webview.start(debug=True)  # 阻塞到窗口关闭
         logger.info("webview: 主线程 event loop 已退出（窗口关闭）")
         return True
     except Exception as e:
