@@ -9,6 +9,7 @@ from agent import auto_approve, conversation_events, conversation_meta, conversa
 from agent.config import load_config
 from agent.session import SessionManager
 from agent.skill_loader import load_md_skills
+from agent.tools.read_tool_output import make_read_tool_output_tool
 from agent.user_space import UserSpace
 from api.channel import (
     ExternallyConfirmable,
@@ -66,6 +67,10 @@ PLAN_INSTRUCTION = """## 执行流程（严格遵守）
 
    已注册的子命令清单见下方"业务技能"段——`run_command` 只接受这些子命令名，
    传 skill 包名会得到 `Error: 未注册的命令` 错误。
+
+   **读取被截断的工具输出**：如果 `run_command` 返回里提示「saved to tool_outputs/xxx.json」，
+   用 `read_tool_output` 工具查看完整输出内容（传文件路径，支持 offset + limit 分片），
+   不要用 `run_command cat`。
 
 2. **业务工具全部执行完毕后，直接以 Markdown 文本输出最终分析结果**——
    系统会把你的文字逐 token 流式推送到前端。
@@ -212,8 +217,9 @@ async def _start_v2_agent_run(channel, user_id: str, conversation_id: str, messa
     store = await _get_v2_store()
     runner_v2 = AgentRunnerV2(store)
 
-    # 构造 tools 列表 = skill tools + 可选 task tool（subagents 配置非空时才加）
+    # 构造 tools 列表 = skill tools + read_tool_output + 可选 task tool（subagents 配置非空时才加）
     tools = list(md_pkg.tools)
+    tools.append(make_read_tool_output_tool(data_dir=cfg.persistence.data_dir, user_id=user_id))
     task_tool = make_task_tool(
         subagents=cfg.agent.subagents,
         base_loop_config=loop_config,
