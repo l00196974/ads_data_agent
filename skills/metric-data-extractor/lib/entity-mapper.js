@@ -23,6 +23,32 @@ class EntityMapper {
     this.dimensionValuesConfig = readCsv('config/dimension-values.csv').filter((row) => row.dimension_code);
   }
 
+  _isEnum(dimensionCode) {
+    for (const row of this.dimensionsConfig) {
+      if (row.dimension_code === dimensionCode) {
+        return (row.dimension_type || '').trim().toLowerCase() === 'enum';
+      }
+    }
+    return false;
+  }
+
+  // 只有 enum 和 semi-enum 需要 CSV 值校验。string/id/date/package 直接透传。
+  _needsValueCheck(dimensionCode) {
+    for (const row of this.dimensionsConfig) {
+      if (row.dimension_code === dimensionCode) {
+        const t = (row.dimension_type || '').trim().toLowerCase();
+        return t === 'enum' || t === 'semi-enum';
+      }
+    }
+    return true; // 未知维度保守校验
+  }
+
+  getAllDimensionValues(dimensionCode) {
+    return this.dimensionValuesConfig
+      .filter((row) => row.dimension_code === dimensionCode)
+      .map((row) => `${row.value} (${row.value_desc || ''})`);
+  }
+
   map(input) {
     const result = {
       metrics: [],
@@ -60,15 +86,26 @@ class EntityMapper {
     }
 
     for (const [key, rawValue] of Object.entries(input.filters || {})) {
-      const mappedDimension = this.mapDimension(key);
-      if (mappedDimension.error) {
-        result.errors.push({
-          field: 'filter',
-          value: key,
-          message: `过滤条件维度 "${key}" 无法识别`,
-          suggestions: this.getSuggestionsForDimension(),
-        });
-        continue;
+      // 支持维度和指标两种过滤：先试维度，再试指标
+      let mappedKey = this.mapDimension(key);
+      let isMetricFilter = false;
+      if (mappedKey.error) {
+        const mappedMetric = this.mapMetric(key);
+        if (!mappedMetric.error) {
+          mappedKey = mappedMetric;
+          isMetricFilter = true;
+        } else {
+          result.errors.push({
+            field: 'filter',
+            value: key,
+            message: `过滤条件 "${key}" 无法识别（不是维度也不是指标）`,
+            suggestions: [
+              ...this.getSuggestionsForDimension().map(s => `维度: ${s}`),
+              ...this.getSuggestionsForMetric().map(s => `指标: ${s}`),
+            ],
+          });
+          continue;
+        }
       }
 
       // query-metrics 把 --filters 解析成 `{oper, values}` 字典；
@@ -98,21 +135,22 @@ class EntityMapper {
       const isNullOper = NULL_OPERS.has(inputOper);
 
       let resolvedValues;
-      if (needsValueCheck) {
+      if (needsValueCheck && !isMetricFilter && this._needsValueCheck(mappedKey.value)) {
         resolvedValues = [];
         for (const value of valueList) {
-          const mappedValue = this.mapDimensionValue(mappedDimension.value, value);
+          const mappedValue = this.mapDimensionValue(mappedKey.value, value);
           if (mappedValue.error) {
-            // 优先用 mapper 给的 fuzzy 候选（语义相近）；没找到 fuzzy 就退到 top-6
-            // 字典序候选，让 LLM 至少看到这个维度有哪些合法值可挑
-            const suggestions = (mappedValue.fuzzySuggestions && mappedValue.fuzzySuggestions.length)
-              ? mappedValue.fuzzySuggestions
-              : this.getSuggestionsForDimensionValue(mappedDimension.value);
+            // enum 维度：值集合穷举，直接列全集；非 enum：先 fuzzy 再 top-6
+            const suggestions = this._isEnum(mappedKey.value)
+              ? this.getAllDimensionValues(mappedKey.value)
+              : ((mappedValue.fuzzySuggestions && mappedValue.fuzzySuggestions.length)
+                ? mappedValue.fuzzySuggestions
+                : this.getSuggestionsForDimensionValue(mappedKey.value));
             result.errors.push({
               field: 'filter_value',
-              dimension: mappedDimension.value,
+              dimension: mappedKey.value,
               value,
-              message: `维度 "${mappedDimension.value}" 的值 "${value}" 无法识别`,
+              message: `维度 "${mappedKey.value}" 的值 "${value}" 无法识别`,
               suggestions,
             });
             continue;
@@ -126,8 +164,8 @@ class EntityMapper {
 
       // 空值运算符即使 valueList 空也要保留——它的语义就是不需要值
       if (resolvedValues.length > 0 || isNullOper) {
-        result.filters[mappedDimension.value] = {
-          source: mappedDimension.value,
+        result.filters[mappedKey.value] = {
+          source: mappedKey.value,
           oper: inputOper,
           targetValue: resolvedValues,
         };
