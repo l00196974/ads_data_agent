@@ -70,11 +70,11 @@ class DSLBuilder {
       finalDimensions = rawDimensions.filter(d => !timingKeys.includes(d));
     }
 
-    // orderBy schema：业界标准用 [{source, order}]。
-    // TODO(部署方): 如果华为广告 API 期望不同的 schema（如 {field, dir} / {column, sort}），
-    // 在这里调整。当前是基于"与 filterConditions / dimensions 风格一致"的合理猜测。
+    // orderBy schema：华为广告 API 期望 [{colName, type}]。
+    // colName 可以是维度代码（如 mediaName）或指标代码（如 cost）。
+    // Wisedata 后端在 _transformToValueRequest 中会将维度代码映射为 en_name。
     const orderBy = sortBy
-      ? [{ source: sortBy, order: String(sortOrder || 'desc').toUpperCase() }]
+      ? [{ colName: sortBy, type: String(sortOrder || 'desc').toUpperCase() }]
       : null;
 
     return {
