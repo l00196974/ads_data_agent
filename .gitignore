@@ -50,6 +50,11 @@ scripts/probe_*.py
 # Claude Code per-machine settings (share .claude/settings.json, ignore .local)
 .claude/settings.local.json
 
+# VSCode 工作区配置：混含个人偏好（字体/主题）和安全姿态（如 Claude Code 的
+# allowDangerouslySkipPermissions）。安全策略让每个开发者自己选——不强加到仓库。
+# 如果将来需要团队统一的代码风格设置（formatter / lint），单独 git add -f 加白名单。
+.vscode/
+
 # Eval outputs（每次跑都会变，靠 results.json.example 当模板）
 benchmarks/*/results.json
 
