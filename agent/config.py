@@ -95,6 +95,27 @@ class InterruptConfig(BaseModel):
         return "none"
 
 
+class ScheduledTaskConfig(BaseModel):
+    """单个定时任务声明（config.yaml::agent.scheduled_tasks）。
+
+    框架按 interval 周期跑 skills/<skill>/ 下指定路径的脚本。框架本身**不感知**任务
+    的业务语义——只知道"按周期跑某个 skill 内脚本"。典型用途：token 刷新、定期数据
+    同步、缓存预热等。
+
+    设计取舍——为什么用 `script` 路径而非 SKILL.md::bin 命令名：
+    定时任务通常是后台运维操作（token 刷新等），**不应**让 LLM 通过 run_command 触发。
+    走 script 路径既不污染 SKILL.md::bin（LLM 看不到这个能力），又保持 skill 自含
+    （脚本仍在 skill 包内）。如果某 skill 真有"既要 LLM 调又要后台跑"的脚本，就在
+    package.json::bin **额外** expose 一次，两种调用各自独立。
+    """
+
+    skill: str                          # skills/ 下子目录名
+    script: str                         # 相对该 skill 目录的脚本路径（如 "lib/refresh-token.js"）
+    interval_seconds: int = 900         # 默认 15 分钟
+    on_startup: bool = False            # 启动时是否立即跑一次（如 token 必须先有才能查的场景）
+    timeout_seconds: int = 120          # 单次执行超时
+
+
 class AgentConfig(BaseModel):
     max_iterations: int = 20  # legacy 字段，未被任何代码消费——保留以免破坏旧 config.yaml
     timeout_seconds: int = 120
@@ -110,6 +131,7 @@ class AgentConfig(BaseModel):
     interrupt_on: InterruptConfig = InterruptConfig()
     long_context: LongContextConfig = LongContextConfig()
     subagents: list[SubAgentSpec] = []  # 主 Agent 可派工的子 Agent 列表
+    scheduled_tasks: list[ScheduledTaskConfig] = []  # 后台定时任务（token 刷新等）
 
 
 class LLMConfig(BaseModel):

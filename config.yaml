@@ -165,6 +165,16 @@ agent:
         - 不复述中间工具调用过程（这些主 Agent 不需要看到）
         - 如果生成了 artifact，回 artifact_id 让主 Agent 引导用户查看
 
+  # 定时任务：框架按 interval 周期跑 skills/<skill>/<script> 脚本。部署方按需声明——
+  # 典型用途：token 自动续期、定期数据同步、缓存预热等。框架本身不感知任务的业务语义，
+  # 也不会让 LLM 通过 run_command 调到这些脚本（详见 agent/skill_scheduler.py 设计说明）。
+  scheduled_tasks:
+    - skill: metric-data-extractor
+      script: lib/refresh-wisedata-token.js
+      interval_seconds: 900     # 每 15 分钟检查一次
+      on_startup: false         # 启动时不立即跑（首次查询触发 browserLogin/MFA 即可）
+      timeout_seconds: 120
+
 persistence:
   type: local
   data_dir: ./data
