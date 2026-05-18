@@ -6,7 +6,8 @@
     "query-metrics": "./bin/query-metrics.js",
     "search-dimension-values": "./bin/search-dimension-values.js",
     "list-metrics": "./bin/list-metrics.js",
-    "list-dimensions": "./bin/list-dimensions.js"
+    "list-dimensions": "./bin/list-dimensions.js",
+    "wisedata-client": "./lib/wisedata-client.js"
   },
   "scripts": {},
   "dependencies": {
