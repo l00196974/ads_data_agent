@@ -4,7 +4,7 @@ const fs = require('fs');
 const { parseArgs, printJsonError } = require('../lib/arg-parser');
 const { EntityMapper } = require('../lib/entity-mapper');
 const { DSLBuilder } = require('../lib/dsl-builder');
-const { HuaweiAdsClient } = require('../lib/api-client');
+const { HuaweiAdsClient, WisedataApiClient } = require('../lib/api-client');
 const { SemanticSearch } = require('../lib/semantic-search');
 
 function loadConfig() {
@@ -198,9 +198,6 @@ async function trySemanticFix(errors, originalFilters) {
   const searcher = new SemanticSearch();
   await searcher.initialize();
 
-  // error.dimension 是 mapper 反查后的英文 code（如 'promotionTarget'），
-  // 但 originalFilters 的 key 可能是用户传的中文 alias（如 '推广对象'）。
-  // 用 mapper 给每个原 key 解析一次，建反向映射 code → originalKey。
   const mapper = new EntityMapper();
   const codeToOriginalKey = {};
   for (const key of Object.keys(fixedFilters)) {
@@ -208,22 +205,31 @@ async function trySemanticFix(errors, originalFilters) {
     if (!mapped.error) codeToOriginalKey[mapped.value] = key;
   }
 
+  let anyFixed = false;
   for (const error of valueErrors) {
-    const candidates = await searcher.search(error.dimension, error.value, 1);
-    if (candidates.length === 0 || candidates[0].similarity < 0.5) {
-      return null;
-    }
+    // enum 维度在 mapper 里已经给了全集，不需要再做语义搜索
+    if (mapper._isEnum(error.dimension)) continue;
 
-    const originalKey = codeToOriginalKey[error.dimension];
-    if (originalKey && fixedFilters[originalKey] && Array.isArray(fixedFilters[originalKey].values)) {
-      // 保留原 oper（GT/LIKE/IN 等），只把语义搜索修正后的 value 替换原值。
-      // 注意 SemanticSearch.search 返回的字段是 `value`，不是 `value_code`
-      // —— SKILL.md 第 471 行明确说「使用 value 字段而不是 value_desc」。
-      fixedFilters[originalKey].values = [candidates[0].value];
+    // topK=5：既用于自动纠错，也用于丰富 error.suggestions
+    const candidates = await searcher.search(error.dimension, error.value, 5);
+    if (candidates.length === 0) continue;
+
+    // 用语义搜索结果替换 dumb top-6，LLM 看到的就是跟输入相关的候选
+    error.suggestions = candidates.map(
+      (c) => `${c.value} (${c.value_desc || ''})`,
+    );
+
+    // 自动纠错：top-1 相似度 ≥ 0.5 则替换
+    if (candidates[0].similarity >= 0.5) {
+      const originalKey = codeToOriginalKey[error.dimension];
+      if (originalKey && fixedFilters[originalKey] && Array.isArray(fixedFilters[originalKey].values)) {
+        fixedFilters[originalKey].values = [candidates[0].value];
+        anyFixed = true;
+      }
     }
   }
 
-  return fixedFilters;
+  return anyFixed ? fixedFilters : null;
 }
 
 async function main() {
@@ -288,11 +294,22 @@ async function main() {
     });
 
     const cfg = loadConfig();
-    const client = new HuaweiAdsClient({
-      baseUrl: cfg.METRICS_API_URL,
-      appId: cfg.HUAWEI_ADS_APP_ID,
-      secret: cfg.HUAWEI_ADS_SECRET,
-    });
+
+    // 根据配置选择后端实现
+    const backend = (cfg.METRICS_BACKEND || 'huawei-ads').toLowerCase();
+    let client;
+
+    if (backend === 'wisedata') {
+      client = new WisedataApiClient({
+        baseUrl: cfg.METRICS_API_URL,
+      });
+    } else {
+      client = new HuaweiAdsClient({
+        baseUrl: cfg.METRICS_API_URL,
+        appId: cfg.HUAWEI_ADS_APP_ID,
+        secret: cfg.HUAWEI_ADS_SECRET,
+      });
+    }
 
     // 调试日志：默认只打摘要（避免单次响应几千行 JSON 淹没 backend 日志 + tool_outputs 文件膨胀）
     // --debug 打开后输出完整 REQUEST/RESPONSE，排查问题时使用
