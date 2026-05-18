@@ -1,3 +1,4 @@
+import asyncio
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -22,6 +23,7 @@ from agent import (
     conversation_metrics,
     tool_outputs_cleanup,
 )
+from agent.wisedata_token_refresher import start_refresher
 from agent.config import load_config
 from agent.log_setup import init_logging
 from api import artifacts, chat, skills
@@ -85,9 +87,22 @@ async def _warmup_for_first_request() -> None:
 async def lifespan(_app: FastAPI):
     # 首次请求预热——前置 tiktoken / skill / ThreadStore 的懒加载
     await _warmup_for_first_request()
+
+    # 启动 wisedata token 后台自动刷新（每 5 分钟检查，过期前 15 分钟自动刷新）
+    project_root = Path(__file__).parent
+    refresh_task = await start_refresher(project_root)
+
     try:
         yield
     finally:
+        # 停止 token 刷新后台任务
+        if not refresh_task.done():
+            refresh_task.cancel()
+            try:
+                await refresh_task
+            except asyncio.CancelledError:
+                pass
+
         # 关 ThreadStore（释放 aiosqlite connection）
         try:
             from api import chat as chat_module
