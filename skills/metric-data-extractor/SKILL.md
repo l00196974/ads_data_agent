@@ -18,7 +18,8 @@ user-invocable: true
    - 事件时间 (`event`) → 用 `day`（虚拟标记，自动转 `timingDimension`）
    - 请求时间 (`request`) → 用 `reqDay`（真实 API 维度，系统自动注入）
 5. **避免无过滤宽查询**：工具自动截断到 1000 条；返回里有 `truncated: true` 说明数据不全，**不能据此给全量结论**。
-6. **mediaName 双值兼容（数据脏，临时绕过）**：现实数据里"华为浏览器"以两个不同标签同时存在 —— `华为浏览器` 和 `HUAWEI Browser`。任何涉及华为浏览器的查询**必须用 IN 同时包两值**，否则会漏数：
+6. **`--filters` 支持维度和指标过滤**：过滤条件 source 可以是维度 code（如 `mediaName`、`promotionTarget`）也可以是指标 code（如 `cost`、`exposure`）。系统会自动路由到后端对应的 `dimensionCondition` 或 `indicatorCondition`。**用 `list-dimensions` 查看可用维度，`list-metrics` 查看可用指标**。
+7. **mediaName 双值兼容（数据脏，临时绕过）**：现实数据里"华为浏览器"以两个不同标签同时存在 —— `华为浏览器` 和 `HUAWEI Browser`。任何涉及华为浏览器的查询**必须用 IN 同时包两值**，否则会漏数：
    ```bash
    ✅ --filters "mediaName=in:华为浏览器,HUAWEI Browser"
    ❌ --filters "mediaName=华为浏览器"   # 只查到一半
@@ -189,6 +190,8 @@ query-metrics \
 | `--page-size` | | 限制返回行数（避免触发 1000 行截断） |
 | `--sort-by` `--sort-order` | | 排序：`--sort-by cost --sort-order desc` |
 | `--debug` | | 打印完整 REQUEST/RESPONSE JSON 到 stderr，排查用 |
+
+> **⚠️ 维度和指标过滤都支持**：`--filters` 的 key 可以是维度 code（如 `mediaName`、`promotionTarget`、`business_partnership`），也可以是指标 code（如 `cost`、`exposure`）。系统会根据 key 自动路由到 `dimensionCondition` 或 `indicatorCondition`。
 
 #### 过滤格式（推荐键值对）
 
