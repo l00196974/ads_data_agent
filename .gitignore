@@ -62,3 +62,11 @@ benchmarks/*/results.json
 # git 不该追踪。如果你确实需要把某个 skill 纳入这份仓库管理，可以 git add -f 覆盖。
 skills/*/
 
+# 已入仓的 skill 内"实际配置"不入仓——避免 git pull 把别人的本地配置覆盖。
+# 约定：每个实际配置都有同名 + .example 后缀的样例文件，新部署从 example 拷贝改名。
+# 这里精确列举，避免 *.csv / *.json 之类通配误伤 skill 内的 schema / 元数据文件。
+skills/metric-data-extractor/config.json
+skills/metric-data-extractor/config/dimensions.csv
+skills/metric-data-extractor/config/dimension-values.csv
+skills/metric-data-extractor/config/metrics.csv
+
