@@ -632,3 +632,89 @@ def test_build_openai_messages_skips_reasoning_when_none():
     out = loop._build_openai_messages(state)
     assistant = next(m for m in out if m.get("role") == "assistant")
     assert "reasoning_content" not in assistant
+
+
+@pytest.mark.asyncio
+async def test_tool_call_arriving_yielded_before_args_complete():
+    """tool_call_arriving 应在 name 一到就 yield，不等 args JSON 累积完——
+    解决首问"AI 正在规划任务..."长时间无可见进度的痛点。"""
+    # 模拟真实 OpenAI 协议流式行为：
+    #   chunk 1: id + name 出现（args 还是空）
+    #   chunk 2-4: args 字符级分片
+    #   chunk 5: finish_reason
+    call1_chunks = [
+        _make_chunk(tool_calls=[_make_tc_delta(index=0, id="call_x", name="query_test", arguments="")]),
+        _make_chunk(tool_calls=[_make_tc_delta(index=0, arguments='{"q":')]),
+        _make_chunk(tool_calls=[_make_tc_delta(index=0, arguments='"hi"')]),
+        _make_chunk(tool_calls=[_make_tc_delta(index=0, arguments='}')]),
+        _make_chunk(finish_reason="tool_calls"),
+    ]
+    call2_chunks = [
+        _make_chunk(content="done"),
+        _make_chunk(finish_reason="stop"),
+    ]
+    client = _make_fake_client([call1_chunks, call2_chunks])
+
+    tool = ToolSpec(
+        name="query_test",
+        func=lambda args: _coro("ok"),
+        schema={"name": "query_test", "parameters": {"type": "object"}},
+    )
+    loop = _make_loop(tools=[tool], fake_client=client)
+
+    events = []
+    async for ev in loop.run("hi"):
+        events.append(ev)
+
+    types = [e["type"] for e in events]
+    # arriving 必须出现且在 tool_start 之前（早期可见反馈的整个意义所在）
+    assert "tool_call_arriving" in types
+    assert types.index("tool_call_arriving") < types.index("tool_start")
+
+    arriving = next(e for e in events if e["type"] == "tool_call_arriving")
+    assert arriving["tool_call_id"] == "call_x"
+    assert arriving["tool_name"] == "query_test"
+
+    # 同一 index 只触发一次 arriving——args 后续 chunk 不应重复 emit
+    arriving_count = sum(1 for e in events if e["type"] == "tool_call_arriving")
+    assert arriving_count == 1
+
+
+@pytest.mark.asyncio
+async def test_tool_call_arriving_independent_per_parallel_call():
+    """多工具并行 emit 时，每个 tool_call_id 各自独立触发一次 arriving。"""
+    call1_chunks = [
+        _make_chunk(tool_calls=[
+            _make_tc_delta(index=0, id="call_a", name="tool_a", arguments=""),
+            _make_tc_delta(index=1, id="call_b", name="tool_b", arguments=""),
+        ]),
+        _make_chunk(tool_calls=[
+            _make_tc_delta(index=0, arguments='{}'),
+            _make_tc_delta(index=1, arguments='{}'),
+        ]),
+        _make_chunk(finish_reason="tool_calls"),
+    ]
+    call2_chunks = [_make_chunk(content="ok"), _make_chunk(finish_reason="stop")]
+    client = _make_fake_client([call1_chunks, call2_chunks])
+
+    tools = [
+        ToolSpec(name="tool_a", func=lambda a: _coro("A"), schema={"name": "tool_a", "parameters": {"type": "object"}}),
+        ToolSpec(name="tool_b", func=lambda a: _coro("B"), schema={"name": "tool_b", "parameters": {"type": "object"}}),
+    ]
+    loop = _make_loop(tools=tools, fake_client=client)
+
+    arrivings = []
+    async for ev in loop.run("go"):
+        if ev["type"] == "tool_call_arriving":
+            arrivings.append(ev)
+
+    assert len(arrivings) == 2
+    ids = {e["tool_call_id"] for e in arrivings}
+    names = {e["tool_name"] for e in arrivings}
+    assert ids == {"call_a", "call_b"}
+    assert names == {"tool_a", "tool_b"}
+
+
+async def _coro(v):
+    """单个值包成 coroutine——ToolSpec.func 要求 async callable。"""
+    return v

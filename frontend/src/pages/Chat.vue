@@ -26,7 +26,12 @@
           <div class="progress-bar">
             <div class="progress-indicator"></div>
           </div>
-          <span class="progress-text"><span class="progress-dot">●</span> {{ progressText }}</span>
+          <span class="progress-text">
+            <span class="progress-dot">●</span>
+            {{ progressText }}
+            <span class="progress-elapsed">{{ progressElapsedSec.toFixed(1) }}s</span>
+            <span v-if="progressHint" class="progress-hint">{{ progressHint }}</span>
+          </span>
         </div>
 
         <!-- LLM metrics 实时栏：会话累计 + 本轮 + 实时（模型/速度/上下文）-->
@@ -217,7 +222,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, nextTick } from 'vue'
+import { ref, computed, onMounted, nextTick, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
@@ -250,6 +255,31 @@ const currentStreamingIdx = ref(null)
 // 真正的回合边界：sendOrAppend 开始时 reset 为 null。
 const currentThinkingIdx = ref(null)
 const progressText = ref('')
+// progress 文字旁的计时器——LLM 首问 TTFT 经常 3-10 秒"无声等待"，文字不变会
+// 让用户怀疑卡死了。挂一个秒数 + 长时长提示，让"时间在走"这个事实可见。
+// 进入新一段 progress（progressText 从 '' 变非空）启动；progressText 清空时关停。
+const progressElapsedSec = ref(0)
+let progressTimerId = null
+let progressStartedAt = 0
+watch(progressText, (newVal, oldVal) => {
+  if (newVal && !oldVal) {
+    progressStartedAt = performance.now()
+    progressElapsedSec.value = 0
+    progressTimerId = setInterval(() => {
+      progressElapsedSec.value = (performance.now() - progressStartedAt) / 1000
+    }, 100)
+  } else if (!newVal && progressTimerId) {
+    clearInterval(progressTimerId)
+    progressTimerId = null
+    progressElapsedSec.value = 0
+  }
+})
+// 超过 5 秒挂一句"首问 cache 冷"提示——让用户理解为什么慢，不是 bug
+const progressHint = computed(() => {
+  if (progressElapsedSec.value < 5) return ''
+  if (progressElapsedSec.value < 15) return '（首问较慢——LLM 在处理大段上下文）'
+  return '（仍在等 LLM 响应——大 prompt / 推理模型可能需要 10s+）'
+})
 // 最近一次 LLM 调用的 metrics（覆盖式：每次 on_chat_model_end 后端推一条）。
 // 顶部状态栏「本次调用」组读取这个对象 —— 含速度 / 上下文进度条（这些是实时观测值，
 // 没法累加）。切换会话 / 新对话时 reset 为 null，避免显示别的会话的脏数据。
@@ -498,27 +528,68 @@ async function sendOrAppend() {
       },
       step: (data) => {
         closeStreaming()
-        // 同一工具的 start/end 是同一条 log 的状态变化，不是两条独立条目。
-        // 不用图标，靠 "执行中..." 后缀表达运行态——end 漏报时也只是后缀残留，不会误显示假完成。
+        // 一个工具按 tool_call_id 走三态：arriving (准备中) → running (执行中) → done
+        // 同 id 找到既有条目就 in-place 升级，不再 append；找不到再 append。
         // data.subagent 存在 = 当前工具在某个子 Agent 内部执行，前缀加 "↳" + 缩进，
         // 让用户一眼看出"这是子 Agent 干的活"，不是主 Agent 调的。
-        if (data.type === 'tool_start') {
-          const indent = data.subagent ? '   ↳ ' : ''
-          appendLog({ label: `${indent}${data.msg} 执行中...`, kind: 'running', subagent: data.subagent || null })
+        const indent = data.subagent ? '   ↳ ' : ''
+        const tcId = data.tool_call_id || null
+
+        // 在当前 thinking 分组里按 id 找 entry——只在有 tcId 时找，无 id 走 append
+        const findEntryById = () => {
+          if (!tcId || currentThinkingIdx.value === null) return null
+          const group = messages.value[currentThinkingIdx.value]
+          if (!group?.entries) return null
+          for (let k = group.entries.length - 1; k >= 0; k--) {
+            if (group.entries[k].toolCallId === tcId) return group.entries[k]
+          }
+          return null
+        }
+
+        if (data.type === 'tool_arriving') {
+          // LLM 流到了工具 name 但 args 还在累积——铺占位条让用户立刻看到"在准备"
+          appendLog({
+            label: `${indent}${data.msg}`,
+            kind: 'arriving',
+            subagent: data.subagent || null,
+            toolCallId: tcId,
+          })
+        } else if (data.type === 'tool_start') {
+          // args 完整、即将派发——按 id 找占位条升级为完整命令 + "执行中..."
+          const existing = findEntryById()
+          if (existing) {
+            existing.label = `${indent}${data.msg} 执行中...`
+            existing.kind = 'running'
+            existing.subagent = data.subagent || null
+          } else {
+            appendLog({
+              label: `${indent}${data.msg} 执行中...`,
+              kind: 'running',
+              subagent: data.subagent || null,
+              toolCallId: tcId,
+            })
+          }
           // backend 仅在 run_command 时传 skill_subcmd——按时序去重收集到本轮列表
           if (data.skill_subcmd && !turnSkills.value.includes(data.skill_subcmd)) {
             turnSkills.value.push(data.skill_subcmd)
           }
         } else {
-          const group = currentThinkingIdx.value !== null
-            ? messages.value[currentThinkingIdx.value]
-            : null
-          if (group) {
-            for (let k = group.entries.length - 1; k >= 0; k--) {
-              if (group.entries[k].kind === 'running') {
-                group.entries[k].label = group.entries[k].label.replace(/\s*执行中\.\.\.$/, '')
-                group.entries[k].kind = 'done'
-                break
+          // tool_end：优先按 id 收尾，没 id 时 fallback 到旧版"找最后一个 running"
+          const existing = findEntryById()
+          if (existing) {
+            existing.label = existing.label.replace(/\s*执行中\.\.\.$/, '')
+            existing.kind = 'done'
+          } else {
+            const group = currentThinkingIdx.value !== null
+              ? messages.value[currentThinkingIdx.value]
+              : null
+            if (group) {
+              for (let k = group.entries.length - 1; k >= 0; k--) {
+                if (group.entries[k].kind === 'running') {
+                  group.entries[k].label = group.entries[k].label.replace(/\s*执行中\.\.\.$/, '')
+                  group.entries[k].kind = 'done'
+                  break
+                }
               }
             }
           }
@@ -937,6 +1008,21 @@ function logout() {
   color: #2f54eb;
   font-size: 10px;
 }
+/* 计时器——告诉用户"时间在走"。等宽字体让数字不跳动（13.0s → 13.1s 时不抖宽） */
+.progress-elapsed {
+  font-size: 12px;
+  font-weight: 500;
+  color: #1d39c4;
+  font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, SFMono-Regular, "Cascadia Mono", Menlo, monospace;
+  margin-left: 4px;
+}
+/* 5 秒后挂提示语，柔和一点别抢主文字风头 */
+.progress-hint {
+  font-size: 12px;
+  color: #8c8c8c;
+  margin-left: 6px;
+}
 
 @keyframes progress-pulse {
   0% { transform: translateX(-100%); }
@@ -1267,6 +1353,23 @@ function logout() {
 }
 .thinking-entry.entry-running {
   color: #c7000b;
+}
+/* arriving = LLM 流出 tool name 但 args 还在累积，占位"准备中"。
+   柔和灰 + 闪烁，让用户在 args JSON 还没拼齐的几秒内就有可见反馈。
+   收到 tool_start 后会就地升级为 entry-running，闪烁停止。 */
+.thinking-entry.entry-arriving {
+  color: #8c8c8c;
+  font-style: italic;
+  animation: arriving-pulse 1.2s ease-in-out infinite;
+}
+.thinking-entry.entry-arriving::after {
+  content: ' 准备中...';
+  font-size: 12px;
+  color: #bfbfbf;
+}
+@keyframes arriving-pulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
 }
 .thinking-entry.entry-plan {
   color: #1a1a1a;

@@ -11,7 +11,12 @@ class CLIChannel(BaseChannel):
         step_type: str,
         subagent: str | None = None,
         skill_subcmd: str | None = None,
+        tool_call_id: str | None = None,
     ) -> None:
+        # CLI 直接忽略 tool_arriving——同栈连续输出场景下"准备中 → 执行中"重复
+        # 抖动反而吵；CLI 用户已经直接看见整段流，不需要占位。
+        if step_type == "tool_arriving":
+            return
         icon = "▶️  执行中" if step_type == "tool_start" else "✅ 完成"
         # CLI 用缩进 + 子 Agent 名前缀展示嵌套；skill_subcmd 在 CLI 不单独显示
         # （msg 本身已含命令串），仅 web channel 需要这字段做 metrics 聚合

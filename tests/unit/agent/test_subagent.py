@@ -71,8 +71,8 @@ class _FakeChannel:
     def __init__(self):
         self.events = []
 
-    async def send_step(self, msg, type, subagent=None, skill_subcmd=None):
-        self.events.append(("step", msg, type, subagent, skill_subcmd))
+    async def send_step(self, msg, type, subagent=None, skill_subcmd=None, tool_call_id=None):
+        self.events.append(("step", msg, type, subagent, skill_subcmd, tool_call_id))
 
     async def send_token(self, t): pass
     async def send_progress(self, m): pass

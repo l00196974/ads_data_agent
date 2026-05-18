@@ -53,8 +53,15 @@ class BaseChannel(ABC):
         step_type: str,
         subagent: str | None = None,
         skill_subcmd: str | None = None,
+        tool_call_id: str | None = None,
     ) -> None:
-        """工具执行步骤：tool_start / tool_end（显示在顶部步骤追踪区）
+        """工具执行步骤：tool_arriving / tool_start / tool_end（显示在顶部步骤追踪区）
+
+        step_type:
+            - "tool_arriving": LLM 流到了工具 name 但 args 还在流。前端铺占位条
+              （label = "name 准备中..."）。仅 WebSSE 真推 SSE；CLI 可忽略。
+            - "tool_start": args 完整、即将派发执行（label 含完整 CLI 命令）
+            - "tool_end": 执行完成
 
         subagent: 当工具在某个子 Agent 内部执行时传该子 Agent 的 name
             （如 "issue-diagnostician"）。主 Agent 直接调用时为 None。
@@ -63,6 +70,10 @@ class BaseChannel(ABC):
         skill_subcmd: 仅 run_command 工具调用时由 runner 解析出来传入——
             如 "query-metrics"。前端在 metrics 栏聚合"本轮调用的 skill"列表，
             其他工具（task / write_file / 框架内置）不传。
+
+        tool_call_id: 当前 tool_call 的稳定 id（来自 LLM 协议）。前端按 id
+            把 tool_arriving 的占位条升级为 tool_start 的"执行中..."；
+            tool_end 也按 id 找到对应条目收尾。无 id 时（如非工具事件）传 None。
         """
 
     @abstractmethod

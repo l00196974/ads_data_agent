@@ -280,6 +280,8 @@ class AgentLoop:
         accumulated_content = ""
         # tool_calls 增量按 index 累积——OpenAI 协议每个 chunk 可能含部分 args JSON
         tool_calls_by_index: dict[int, dict] = {}
+        # 已对外 yield 过 tool_call_arriving 的 index——避免重复"到达"事件
+        arrived_indexes: set[int] = set()
         usage: dict[str, Any] = {}
         finish_reason: str | None = None
         ttft_ms: int | None = None  # 首 token 延迟（ms）
@@ -340,6 +342,18 @@ class AgentLoop:
                             tool_calls_by_index[idx]["name"] += tc_delta.function.name
                         if tc_delta.function.arguments:
                             tool_calls_by_index[idx]["arguments"] += tc_delta.function.arguments
+                    # 早期"到达"事件：name + id 已知就立即 yield，让前端在 args 还在
+                    # 流的时候就铺占位条。args 完整后 run() 主体仍会 yield 现有的
+                    # tool_start（带完整 command label），前端按 id 把占位条升级为
+                    # "执行中..."。
+                    current = tool_calls_by_index[idx]
+                    if idx not in arrived_indexes and current["name"] and current["id"]:
+                        arrived_indexes.add(idx)
+                        yield {
+                            "type": "tool_call_arriving",
+                            "tool_call_id": current["id"],
+                            "tool_name": current["name"],
+                        }
             if choice.finish_reason:
                 finish_reason = choice.finish_reason
 
@@ -529,6 +543,10 @@ class AgentLoop:
                             usage["input_tokens"] = est_in
                             usage["total_tokens"] = est_in + (usage.get("output_tokens") or 0)
                 if ev["type"] == "token":
+                    yield ev
+                elif ev["type"] == "tool_call_arriving":
+                    # 增量"工具到达"——name 已知、args 还在流。透传给 runner 推前端
+                    # 占位条，缓解首问"AI 正在规划任务..."长时间无动静的体感。
                     yield ev
                 elif ev["type"] == "model_end":
                     ai_msg = ev["ai_message"]

@@ -213,6 +213,19 @@ class AgentRunnerV2:
                                 context_trigger=context_trigger,
                             )
                         )
+                elif ev_type == "tool_call_arriving":
+                    # LLM 流到了工具 name 但 args 还在累积——先发占位条，让前端
+                    # 在首问 LLM 慢吞吞拼 args JSON 的几秒内就有可见反馈。msg 只传
+                    # 工具名（不拼"准备中..."后缀），前端用 entry-arriving 样式
+                    # 通过 CSS ::after 加装饰文字——文案/视觉调整不用回后端。
+                    # 等 tool_start 时按 tool_call_id 把同一条目升级为带完整
+                    # CLI 命令的"执行中..."。
+                    await channel.send_step(
+                        ev["tool_name"],
+                        "tool_arriving",
+                        subagent=None,
+                        tool_call_id=ev["tool_call_id"],
+                    )
                 elif ev_type == "tool_start":
                     label = _format_tool_label(ev["tool_name"], {"command": ev["args"].get("command", "")})
                     skill_subcmd = None
@@ -224,10 +237,14 @@ class AgentRunnerV2:
                         label, "tool_start",
                         subagent=None,
                         skill_subcmd=skill_subcmd,
+                        tool_call_id=ev.get("tool_call_id"),
                     )
                 elif ev_type == "tool_end":
                     label = _format_tool_label(ev["tool_name"], {"command": ev.get("args", {}).get("command", "")})
-                    await channel.send_step(label, "tool_end")
+                    await channel.send_step(
+                        label, "tool_end",
+                        tool_call_id=ev.get("tool_call_id"),
+                    )
                     # 提取 artifact_ids 从工具 output（沿用 skill_loader 已有逻辑）
                     artifact_ids = extract_artifact_ids_from_output(ev.get("output", ""))
                     for aid in artifact_ids:
