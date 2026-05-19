@@ -351,10 +351,26 @@ async def append_message(user_id: str, req: AppendRequest):
     if active is None:
         return {"status": "no_active_run", "hint": "无在跑会话；请直接 /chat 发新问题"}
 
-    # 1. cancel 当前 task；runner 在 CancelledError 时跳过 channel.close，前端不断流。
+    channel = active["channel"]
+    conversation_meta.upsert(user_id, req.conversation_id, req.message)
+
+    # 阶段感知：LLM 在流式输出最终答案时，追问 enqueue 等当前轮完成再处理，
+    # **不打断**正在写的答案。runner_v2 的 while-loop 会在 complete 后检查
+    # pending_appends，自动 fire 新一轮（LLM 看到完整历史 + 队列里的追问）。
+    if channel.is_streaming_final() and not active["task"].done():
+        channel.enqueue_pending_append(req.message)
+        return {
+            "status": "queued",
+            "message": req.message,
+            "hint": "AI 正在写最终回答，您的追问已加入队列，当前回答完成后会处理",
+        }
+
+    # 工具调用 / planning 阶段：cancel + 重起。这种阶段还没流出任何"最终答案"
+    # token，丢弃当前 task 的代价小，让 LLM 立刻看到新追问更符合用户预期
+    # （"想到补一句"通常发生在 LLM 还在规划/调工具时）。
+    #
     # 这里**不要 shield**——shield 会让 wait_for 超时只 cancel shield future、
-    # 原 task 继续跑，结果新一轮和旧 task 同时往 langgraph 同 thread 写状态。
-    # 直接 await task：上面已经 cancel() 过了，wait_for 只是等它响应并退出。
+    # 原 task 继续跑，结果新一轮和旧 task 同时往 thread 写状态。
     if not active["task"].done():
         active["task"].cancel()
         try:
@@ -362,14 +378,13 @@ async def append_message(user_id: str, req: AppendRequest):
         except (asyncio.CancelledError, asyncio.TimeoutError):
             pass
 
-    # 2. 同 channel 复用，但要刷新 turn_id——新一轮发问的 step 事件要按新 turn_id 分组
+    # 同 channel 复用，刷新 turn_id——新一轮发问的 step 事件要按新 turn_id 分组
     turn_id = uuid4().hex[:12]
-    active["channel"].set_turn_id(turn_id)
-    conversation_meta.upsert(user_id, req.conversation_id, req.message)
+    channel.set_turn_id(turn_id)
 
-    # 3. 在同 channel/thread 上启动新一轮——LLM 看完整历史 + 新追问
+    # 在同 channel/thread 上启动新一轮——LLM 看完整历史 + 新追问
     new_task = await _start_v2_agent_run(
-        active["channel"], user_id, req.conversation_id, req.message,
+        channel, user_id, req.conversation_id, req.message,
     )
     active["task"] = new_task
     _register_active_task(req.conversation_id, new_task)

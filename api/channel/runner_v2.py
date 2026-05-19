@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 from typing import Any
 
 from agent.messages import AIMessage, BaseMessage
@@ -144,11 +145,6 @@ class AgentRunnerV2:
             tools: ToolSpec 列表（来自 SkillsPackage.tools）
             middlewares: middleware 实例列表
         """
-        # 从历史 load——P2 ThreadStore 已经稳定
-        initial_messages = await self.store.load_messages(thread_id)
-
-        loop = AgentLoop(config=loop_config, tools=tools, middlewares=middlewares)
-
         # HitL 回调：channel 提供等待用户决策的能力
         async def on_interrupt(tool_calls: list[ToolCall]) -> bool:
             # 转成 channel.wait_for_confirm 期望的 preview 列表
@@ -156,8 +152,7 @@ class AgentRunnerV2:
                 {"tool_name": tc.name, "args": tc.args, "tool_call_id": tc.id}
                 for tc in tool_calls
             ]
-            # HitL 精细分级：从 loop_config.interrupt_tools 拿每个工具的 risk
-            # 多工具一轮 emit 时取最高级（任一 high 整批按 high 处理）
+            # HitL 精细分级：多工具一轮 emit 时取最高级（任一 high 整批按 high 处理）
             risks = [
                 loop_config.interrupt_tools.get(tc.name, {}).get("risk", "medium")
                 for tc in tool_calls
@@ -178,130 +173,144 @@ class AgentRunnerV2:
                 )
             return approve
 
-        # final_messages 由 loop 在 complete/recursion_limit/error 三个出口带上来
-        # （含 user / system-reminder / 多轮 ai+tool）。runner 拿这个直接落库，
-        # 不用自己拼装顺序。
-        final_messages_from_loop: list[BaseMessage] | None = None
-
-        chat_call_seq = 0
-        latest_usage: dict[str, Any] = {}
-        latest_ai_message: AIMessage | None = None
-
+        # while-loop 主结构：每跑完一轮检查 channel 的 pending_appends——
+        # 流式答案阶段（LLM 在吐最终回答的 token）收到的追问被 enqueue 到队列，
+        # 当前轮 complete 后由本循环 fire 新一轮，**不打断**正在写的答案。
+        # 工具调用阶段的追问仍走 /append 的 cancel + restart 路径（chat.py 内决策）。
         try:
-            async for ev in loop.run(
-                user_message=user_message,
-                thread_id=thread_id,
-                on_interrupt=on_interrupt,
-                initial_messages=initial_messages,
-            ):
-                ev_type = ev["type"]
-                if ev_type == "model_start":
-                    chat_call_seq = ev["call_seq"]
-                    await channel.send_progress("AI 正在规划任务...")
-                elif ev_type == "token":
-                    await channel.send_token(ev["delta"])
-                elif ev_type == "model_end":
-                    latest_ai_message = ev["ai_message"]
-                    latest_usage = ev.get("usage") or {}
-                    if latest_usage:
-                        await channel.send_metrics(
-                            _enrich_metrics(
-                                latest_usage,
-                                call_seq=chat_call_seq,
-                                subagent=None,
-                                model=loop_config.model,
-                                context_trigger=context_trigger,
-                            )
-                        )
-                elif ev_type == "tool_call_arriving":
-                    # LLM 流到了工具 name 但 args 还在累积——先发占位条，让前端
-                    # 在首问 LLM 慢吞吞拼 args JSON 的几秒内就有可见反馈。msg 只传
-                    # 工具名（不拼"准备中..."后缀），前端用 entry-arriving 样式
-                    # 通过 CSS ::after 加装饰文字——文案/视觉调整不用回后端。
-                    # 等 tool_start 时按 tool_call_id 把同一条目升级为带完整
-                    # CLI 命令的"执行中..."。
-                    await channel.send_step(
-                        ev["tool_name"],
-                        "tool_arriving",
-                        subagent=None,
-                        tool_call_id=ev["tool_call_id"],
-                    )
-                elif ev_type == "tool_start":
-                    label = _format_tool_label(ev["tool_name"], {"command": ev["args"].get("command", "")})
-                    skill_subcmd = None
-                    if ev["tool_name"] == "run_command":
-                        cmd = (ev["args"].get("command") or "").strip()
-                        if cmd:
-                            skill_subcmd = cmd.split(maxsplit=1)[0]
-                    await channel.send_step(
-                        label, "tool_start",
-                        subagent=None,
-                        skill_subcmd=skill_subcmd,
-                        tool_call_id=ev.get("tool_call_id"),
-                    )
-                elif ev_type == "tool_end":
-                    label = _format_tool_label(ev["tool_name"], {"command": ev.get("args", {}).get("command", "")})
-                    await channel.send_step(
-                        label, "tool_end",
-                        tool_call_id=ev.get("tool_call_id"),
-                    )
-                    # 提取 artifact_ids 从工具 output（沿用 skill_loader 已有逻辑）
-                    artifact_ids = extract_artifact_ids_from_output(ev.get("output", ""))
-                    for aid in artifact_ids:
-                        await channel.send_artifact_updated(aid, "created")
-                elif ev_type == "interrupt_resolved":
-                    # on_interrupt 回调里已发了用户决策；channel 端透传一条记录
-                    logger.info("interrupt resolved approved=%s thread=%s",
-                                ev.get("approved"), thread_id)
-                elif ev_type == "complete":
-                    latest_ai_message = ev["final_message"]
-                    final_messages_from_loop = ev.get("final_messages")
-                    # 空答兜底：content 仅含空白（如 "\n\n"）、又没工具调用 → 给用户明确
-                    # 提示而不是静默关闭。常见原因：
-                    # - finish_reason="content_filter"（模型拒答）
-                    # - 推理模型把内容全输到 reasoning_content（loop 已尝试 fallback；
-                    #   若 fallback 也失败说明 reasoning 也是空）
-                    # - 模型 endpoint 配置问题
-                    final_content_raw = getattr(latest_ai_message, "content", "") or ""
-                    final_content = final_content_raw if isinstance(final_content_raw, str) else str(final_content_raw)
-                    final_tool_calls = getattr(latest_ai_message, "tool_calls", None) or []
-                    if not final_content.strip() and not final_tool_calls:
-                        await channel.send_token(
-                            "\n\n⚠️ LLM 返回空响应（无内容、无工具调用）。可能原因：\n"
-                            "- 模型触发 content_filter 拒答\n"
-                            "- 模型 endpoint 配置异常（推理模式 / chat_template 问题）\n"
-                            "- 上下文超限被截断\n"
-                            "看后端日志 `model_end: finish_reason=...` 一行可定位。"
-                        )
-                    # 不发额外事件——token 已流完
-                    break
-                elif ev_type == "recursion_limit":
-                    await channel.send_token(
-                        f"\n\n⚠️ **已达本轮工具调用上限**（约 {loop_config.recursion_limit // 2} 次）。"
-                        f"建议：缩小问题范围 / 拆成多个简单问题 / 调高 agent.recursion_limit。"
-                    )
-                    final_messages_from_loop = ev.get("final_messages")
-                    break
-                elif ev_type == "error":
-                    await channel.send_token(f"\n[错误] {ev['exception']}")
-                    final_messages_from_loop = ev.get("final_messages")
-                    break
-        finally:
-            # 持久化策略：loop 在 complete/recursion_limit/error 三个出口都吐
-            # final_messages 完整快照（含 user / system-reminder / 多轮 ai+tool）。
-            # 这里走 overwrite_messages 而不是 append——因为 final_messages 包含的
-            # 是「load 出来的历史 + 本轮 + middleware 注入的 reminder」整段，append
-            # 会跟历史已存的 messages 重复。
-            #
-            # 注意：DateReminder 注入的 <system-reminder> 也会进 final_messages——
-            # 我们故意保留落库（让下次 load 看到上轮的 reminder marker），下轮
-            # DateReminder 会按 marker 删掉换最新。这样不会无限堆积。
-            if final_messages_from_loop is not None:
+            while True:
+                # 每轮重新 load——前一轮 overwrite_messages 后，新一轮要看到最新历史
+                initial_messages = await self.store.load_messages(thread_id)
+                loop = AgentLoop(config=loop_config, tools=tools, middlewares=middlewares)
+
+                # final_messages 由 loop 在 complete/recursion_limit/error 三个出口带上来
+                final_messages_from_loop: list[BaseMessage] | None = None
+
+                chat_call_seq = 0
+                latest_usage: dict[str, Any] = {}
+                latest_ai_message: AIMessage | None = None
+
+                # 新一轮开始——重置 streaming phase（前一轮 complete 后已 reset 但保险）
+                channel.set_streaming_final(False)
+
                 try:
-                    await self.store.overwrite_messages(thread_id, final_messages_from_loop)
-                except Exception as e:
-                    logger.warning("ThreadStore.overwrite_messages failed thread=%s: %s", thread_id, e)
-            # 关闭 channel 以让 SSE 流给客户端发 'done' 事件——跟老 runner 行为对齐
+                    async for ev in loop.run(
+                        user_message=user_message,
+                        thread_id=thread_id,
+                        on_interrupt=on_interrupt,
+                        initial_messages=initial_messages,
+                    ):
+                        ev_type = ev["type"]
+                        if ev_type == "model_start":
+                            chat_call_seq = ev["call_seq"]
+                            # 新 LLM 调用开始——可能又先 tool_calls 再 streaming，
+                            # 这里先重置成"非 streaming"，等真的开始流 token 再标 True
+                            channel.set_streaming_final(False)
+                            await channel.send_progress("AI 正在规划任务...")
+                        elif ev_type == "token":
+                            # 收到 token = LLM 在流式输出（最终答案或 reasoning，
+                            # 都不应被追问打断）。设 True 让 /append 走 enqueue 路径。
+                            if not channel.is_streaming_final():
+                                channel.set_streaming_final(True)
+                            await channel.send_token(ev["delta"])
+                        elif ev_type == "model_end":
+                            latest_ai_message = ev["ai_message"]
+                            latest_usage = ev.get("usage") or {}
+                            if latest_usage:
+                                await channel.send_metrics(
+                                    _enrich_metrics(
+                                        latest_usage,
+                                        call_seq=chat_call_seq,
+                                        subagent=None,
+                                        model=loop_config.model,
+                                        context_trigger=context_trigger,
+                                    )
+                                )
+                        elif ev_type == "tool_call_arriving":
+                            # LLM 流到了工具 name 但 args 还在累积——先发占位条，让前端
+                            # 在 args JSON 还在拼的几秒内就有可见反馈。
+                            await channel.send_step(
+                                ev["tool_name"],
+                                "tool_arriving",
+                                subagent=None,
+                                tool_call_id=ev["tool_call_id"],
+                            )
+                        elif ev_type == "tool_start":
+                            label = _format_tool_label(ev["tool_name"], {"command": ev["args"].get("command", "")})
+                            skill_subcmd = None
+                            if ev["tool_name"] == "run_command":
+                                cmd = (ev["args"].get("command") or "").strip()
+                                if cmd:
+                                    skill_subcmd = cmd.split(maxsplit=1)[0]
+                            await channel.send_step(
+                                label, "tool_start",
+                                subagent=None,
+                                skill_subcmd=skill_subcmd,
+                                tool_call_id=ev.get("tool_call_id"),
+                            )
+                        elif ev_type == "tool_end":
+                            label = _format_tool_label(ev["tool_name"], {"command": ev.get("args", {}).get("command", "")})
+                            await channel.send_step(
+                                label, "tool_end",
+                                tool_call_id=ev.get("tool_call_id"),
+                            )
+                            artifact_ids = extract_artifact_ids_from_output(ev.get("output", ""))
+                            for aid in artifact_ids:
+                                await channel.send_artifact_updated(aid, "created")
+                        elif ev_type == "interrupt_resolved":
+                            logger.info("interrupt resolved approved=%s thread=%s",
+                                        ev.get("approved"), thread_id)
+                        elif ev_type == "complete":
+                            latest_ai_message = ev["final_message"]
+                            final_messages_from_loop = ev.get("final_messages")
+                            # 空答兜底：content 仅空白 / 又无 tool_calls → 给提示而非静默
+                            final_content_raw = getattr(latest_ai_message, "content", "") or ""
+                            final_content = final_content_raw if isinstance(final_content_raw, str) else str(final_content_raw)
+                            final_tool_calls = getattr(latest_ai_message, "tool_calls", None) or []
+                            if not final_content.strip() and not final_tool_calls:
+                                await channel.send_token(
+                                    "\n\n⚠️ LLM 返回空响应（无内容、无工具调用）。可能原因：\n"
+                                    "- 模型触发 content_filter 拒答\n"
+                                    "- 模型 endpoint 配置异常（推理模式 / chat_template 问题）\n"
+                                    "- 上下文超限被截断\n"
+                                    "看后端日志 `model_end: finish_reason=...` 一行可定位。"
+                                )
+                            break
+                        elif ev_type == "recursion_limit":
+                            await channel.send_token(
+                                f"\n\n⚠️ **已达本轮工具调用上限**（约 {loop_config.recursion_limit // 2} 次）。"
+                                f"建议：缩小问题范围 / 拆成多个简单问题 / 调高 agent.recursion_limit。"
+                            )
+                            final_messages_from_loop = ev.get("final_messages")
+                            break
+                        elif ev_type == "error":
+                            await channel.send_token(f"\n[错误] {ev['exception']}")
+                            final_messages_from_loop = ev.get("final_messages")
+                            break
+                finally:
+                    # 本轮持久化（每轮独立 overwrite，下轮 load 拿最新）。
+                    # DateReminder 注入的 <system-reminder> 也进 final_messages——
+                    # 下轮 DateReminder 按 marker 删掉换最新，不会堆积。
+                    if final_messages_from_loop is not None:
+                        try:
+                            await self.store.overwrite_messages(thread_id, final_messages_from_loop)
+                        except Exception as e:
+                            logger.warning("ThreadStore.overwrite_messages failed thread=%s: %s", thread_id, e)
+                    # 本轮结束——重置 streaming phase（下轮新 LLM 调用从 planning 重新计）
+                    channel.set_streaming_final(False)
+
+                # 一轮结束后检查 pending appends（流式答案阶段被 enqueue 的追问）。
+                # 多条 pending 合并成一条新 user_message——LLM 一次看完所有追问。
+                pending = channel.pop_pending_appends()
+                if not pending:
+                    break
+                user_message = "\n\n".join(pending)
+                logger.info("处理 pending append (%d 条) → 新一轮: %s",
+                            len(pending), user_message[:100])
+                # 刷新 turn_id 让前端按新一轮分组事件（CLI 走 BaseChannel no-op 兜底）
+                channel.set_turn_id(uuid.uuid4().hex[:12])
+        finally:
+            # 所有轮跑完或异常时关 channel——SSE 'done' 事件给前端
             try:
                 await channel.close()
             except Exception as e:

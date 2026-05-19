@@ -99,6 +99,8 @@ async def test_start_v2_agent_run_assembles_correctly(tmp_path, monkeypatch):
     class FakeChannel:
         def __init__(self):
             self.events = []
+            self._streaming_final_answer = False
+            self._pending_appends = []
         async def send_token(self, t): self.events.append(("token", t))
         async def send_step(self, *a, **kw): pass
         async def send_progress(self, m): pass
@@ -107,6 +109,12 @@ async def test_start_v2_agent_run_assembles_correctly(tmp_path, monkeypatch):
         async def send_metrics(self, m): pass
         async def wait_for_confirm(self, *a, **kw): return True, False
         async def close(self): pass
+        # phase/queue stubs matching BaseChannel接口
+        def is_streaming_final(self): return self._streaming_final_answer
+        def set_streaming_final(self, v): self._streaming_final_answer = v
+        def enqueue_pending_append(self, m): self._pending_appends.append(m)
+        def pop_pending_appends(self): out = self._pending_appends; self._pending_appends = []; return out
+        def set_turn_id(self, t): pass
 
     channel = FakeChannel()
     try:

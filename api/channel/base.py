@@ -41,6 +41,35 @@ class BaseChannel(ABC):
     def __init__(self, user_id: str, session_id: str):
         self.user_id = user_id
         self.session_id = session_id
+        # 阶段标志：LLM 是否在流式输出最终答案（无 tool_calls 的 ai_message token 流）。
+        # /append 用此判断追问是 cancel+重起（工具调用阶段，立即生效）还是 enqueue
+        # （流式答案阶段，等当前轮 complete 再处理，不打断已经在写的回答）。
+        # runner_v2 负责维护：model_start 时 False、收到 token 时 True、complete 后 False。
+        self._streaming_final_answer = False
+        # 流式答案阶段收到的追问 → 入此队列，本轮 complete 后由 runner_v2 串行处理。
+        self._pending_appends: list[str] = []
+
+    def is_streaming_final(self) -> bool:
+        """LLM 是否在流式输出最终答案（用于 /append 决策）。"""
+        return self._streaming_final_answer
+
+    def set_streaming_final(self, value: bool) -> None:
+        """runner_v2 在 token/model_start/complete 事件时调用维护此状态。"""
+        self._streaming_final_answer = value
+
+    def enqueue_pending_append(self, message: str) -> None:
+        """流式答案阶段收到的追问入队，等当前轮 complete 后处理。"""
+        self._pending_appends.append(message)
+
+    def pop_pending_appends(self) -> list[str]:
+        """取出并清空 pending append 队列（runner_v2 一轮结束时检查）。"""
+        out = self._pending_appends
+        self._pending_appends = []
+        return out
+
+    def set_turn_id(self, turn_id: str) -> None:
+        """Web SSE 需要按 turn_id 给前端分组思考事件；CLI 等其它 channel 无意义——默认 no-op。
+        WebSSEChannel 内会 override，其它子类不需要管。"""
 
     @abstractmethod
     async def send_token(self, token: str) -> None:

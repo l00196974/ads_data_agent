@@ -96,6 +96,27 @@ class _FakeChannel:
     """收集所有 send_* 调用为 (kind, args) 列表，便于断言。"""
     def __init__(self):
         self.events = []  # list of (method, dict_of_args)
+        # phase / queue stubs——跟 BaseChannel 接口保持一致，让 runner_v2
+        # 调用 set_streaming_final / pop_pending_appends 等方法不报 AttributeError
+        self._streaming_final_answer = False
+        self._pending_appends: list[str] = []
+
+    def is_streaming_final(self) -> bool:
+        return self._streaming_final_answer
+
+    def set_streaming_final(self, value: bool) -> None:
+        self._streaming_final_answer = value
+
+    def enqueue_pending_append(self, message: str) -> None:
+        self._pending_appends.append(message)
+
+    def pop_pending_appends(self) -> list[str]:
+        out = self._pending_appends
+        self._pending_appends = []
+        return out
+
+    def set_turn_id(self, turn_id: str) -> None:
+        pass  # FakeChannel 不关心 turn 分组
 
     async def send_token(self, token):
         self.events.append(("token", {"token": token}))
@@ -423,5 +444,61 @@ async def test_history_loaded_across_runs(store):
         assert "第一次回答" in contents
         assert "问题2" in contents
         assert "第二次回答" in contents
+    finally:
+        AgentLoop._get_client = orig
+
+
+@pytest.mark.asyncio
+async def test_pending_append_processed_after_complete(store):
+    """流式答案阶段被 enqueue 的追问，应在当前轮 complete 后自动 fire 新一轮。
+
+    模拟：第一轮 LLM 流出 "回答一"——这期间 channel.enqueue_pending_append("追问")
+    被外部（如 /append endpoint）调用入队。complete 后 runner_v2 的 while-loop
+    应当 pop 出追问、起新一轮、LLM 给出 "回答二"。
+    """
+    chunks_first = [
+        _mk_chunk(content="回答一"),
+        _mk_chunk(finish_reason="stop"),
+        _mk_chunk(usage={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}),
+    ]
+    chunks_second = [
+        _mk_chunk(content="回答二"),
+        _mk_chunk(finish_reason="stop"),
+        _mk_chunk(usage={"input_tokens": 20, "output_tokens": 5, "total_tokens": 25}),
+    ]
+    fake_client = _make_fake_openai_client([chunks_first, chunks_second])
+    from agent.loop import AgentLoop
+    orig = AgentLoop._get_client
+    AgentLoop._get_client = lambda self: fake_client
+    try:
+        runner = AgentRunnerV2(store)
+        ch = _FakeChannel()
+        # 用一个 "在第一个 token 收到时就 enqueue 追问" 的 wrapper——模拟用户
+        # 在流式答案阶段发送追问。
+        orig_send_token = ch.send_token
+        async def send_token_with_enqueue(token):
+            await orig_send_token(token)
+            if "回答一" in token and not ch._pending_appends:
+                ch.enqueue_pending_append("追问内容")
+        ch.send_token = send_token_with_enqueue
+
+        config = AgentConfig(model="m", system_prompt="sp", recursion_limit=10)
+        await runner.run(
+            channel=ch,
+            thread_id="conv_pending",
+            user_message="原始问题",
+            loop_config=config,
+            tools=[],
+            middlewares=[],
+        )
+
+        # 两轮 token 都应该被推到 channel——证明 while-loop 起了新一轮
+        tokens = [e[1]["token"] for e in ch.events if e[0] == "token"]
+        joined = "".join(tokens)
+        assert "回答一" in joined
+        assert "回答二" in joined, f"追问未触发新一轮（tokens={tokens!r}）"
+
+        # 队列被清空（pop 过了）
+        assert ch._pending_appends == []
     finally:
         AgentLoop._get_client = orig
