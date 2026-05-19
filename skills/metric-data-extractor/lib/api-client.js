@@ -336,12 +336,12 @@ class WisedataApiClient {
    * pt_d 可能落在 timingValues 或 dimensionValues 任一处（API 协议演进期间两种都见过）；
    * 提取日期时**两边都看**。
    *
-   * 转换为标准格式：
-   *   [{ date: "2026-01-01", cost: "1000", cpm: "21.0", mediaName: "抖音", ... }]
+   * 转换为标准格式（**输入输出一致性**：用户传啥维度就返啥 key）：
+   *   用户传 --dimensions "pt_d,mediaName"
+   *   → [{ pt_d: "2026-01-01", mediaName: "抖音", cost: "1000", ... }]
    *
    * 不做任何排序——尊重 API 返回的原顺序。用户传 --sort-by 时 API 已按指定列排序；
-   * 不传时也保留 API 自然顺序（华为后端通常按 timingDimension 升序，但不在此处假设）。
-   * LLM 拿到原始顺序后可自行决定如何展示。
+   * 不传时也保留 API 自然顺序。LLM 拿到原始顺序后可自行决定如何展示。
    */
   _transformValueResponse(apiData) {
     const rows = apiData.data || [];
@@ -364,29 +364,22 @@ class WisedataApiClient {
     const result = rows.map(row => {
       const entry = {};
 
-      // 提取日期：先看 timingValues（API 协议旧位置），再 fallback 看 dimensionValues
-      // （新协议把 pt_d 当普通 dimension 返回时落在这里）。两个 key 名都试：
-      // pt_d（新协议）、day（旧协议兼容）。
-      if (row.timingValues) {
-        const timeKey = Object.keys(row.timingValues).find(k => k !== 'timestamp');
-        entry.date = timeKey ? row.timingValues[timeKey] : null;
-        if (!entry.date && row.timingValues.timestamp) {
-          const d = new Date(parseInt(row.timingValues.timestamp, 10));
-          entry.date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-        }
-      }
-      if (!entry.date && row.dimensionValues) {
-        entry.date = row.dimensionValues.pt_d || row.dimensionValues.day || null;
-      }
-
-      // 展开维度值（用 dimension_code 作为 key）。
-      // **跳过时间维度 key**——pt_d / day / reqDay 的值已经规范化到 entry.date，
-      // 再单独展开成 entry.pt_d / entry.day 会让同一日期在结果里重复两次。
-      const TIME_DIM_KEYS = new Set(['pt_d', 'day', 'reqDay']);
+      // 展开维度值——用户传啥维度就返啥 key。pt_d / reqDay 等时间维度也按此规则
+      // （不再单独造一个 `date` 字段——之前的设计让同一日期在 entry.date 和
+      // entry.pt_d 出现两次，且违反"用户入参什么、返回就是什么"的一致性）。
       if (row.dimensionValues) {
         for (const [enName, value] of Object.entries(row.dimensionValues)) {
-          if (TIME_DIM_KEYS.has(enName)) continue;
           entry[enNameToCode[enName] || enName] = value;
+        }
+      }
+
+      // 兼容：API 仍可能把时间字段放在 timingValues 而非 dimensionValues。
+      // 只在 dimensionValues 没有同名 key 时补——避免覆盖已展开的值。
+      // timingValues 的 key 名（pt_d / day / 等）原样保留作为 entry key。
+      if (row.timingValues) {
+        for (const [k, v] of Object.entries(row.timingValues)) {
+          if (k === 'timestamp') continue;
+          if (entry[k] === undefined) entry[k] = v;
         }
       }
 
