@@ -208,7 +208,7 @@ async function trySemanticFix(errors, originalFilters) {
   let anyFixed = false;
   for (const error of valueErrors) {
     // enum 维度在 mapper 里已经给了全集，不需要再做语义搜索
-    if (mapper._isEnum(error.dimension)) continue;
+    if (mapper.isEnum(error.dimension)) continue;
 
     // topK=5：既用于自动纠错，也用于丰富 error.suggestions
     const candidates = await searcher.search(error.dimension, error.value, 5);

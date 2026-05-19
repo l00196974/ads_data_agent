@@ -118,6 +118,21 @@ class WisedataApiClient {
     }
   }
 
+  // 维度 code → API en_name 映射 + 缺映射告警。一次会话同一个 code 只 warn 一次（避免吵）。
+  // pt_d / reqDay 是 API 协议原名（不需要映射），在白名单内静默通过。
+  _mapDimToEnName(code) {
+    if (this._dimEnNameMap[code]) return this._dimEnNameMap[code];
+    const apiNativeNames = new Set(['pt_d', 'reqDay']);
+    if (apiNativeNames.has(code)) return code;
+    // 首次见到的"无映射" code 才 warn——之后同一 code 跳过
+    if (!this._warnedDimCodes) this._warnedDimCodes = new Set();
+    if (!this._warnedDimCodes.has(code)) {
+      this._warnedDimCodes.add(code);
+      console.error(`[WisedataApiClient] 维度 '${code}' 缺 dimension_en_name 映射——按原值透传。若 API 返 400 请检查 dimensions.csv`);
+    }
+    return code;
+  }
+
   /**
    * 确保认证有效 — 优先使用缓存 token
    */
@@ -216,8 +231,9 @@ class WisedataApiClient {
       };
     });
 
-    // dimensions: dimension_code → dimension_en_name（API 使用英文名）
-    const dimensions = (body.dimensions || []).map(d => this._dimEnNameMap[d] || d);
+    // dimensions: dimension_code → dimension_en_name（API 使用英文名）。
+    // 走 _mapDimToEnName 以便缺映射时有 warn 提示（而非静默用原值导致 API 400 难定位）。
+    const dimensions = (body.dimensions || []).map(d => this._mapDimToEnName(d));
 
     // filterConditions → dimensionCondition / indicatorCondition
     // API 区分维度过滤和指标过滤两个独立参数：
@@ -238,9 +254,9 @@ class WisedataApiClient {
             targetValue: fc.targetValue || [],
           });
         } else {
-          // 维度过滤 → dimensionCondition
+          // 维度过滤 → dimensionCondition（同上，缺映射会 warn 一次）
           dimChildren.push({
-            source: this._dimEnNameMap[fc.source] || fc.source,
+            source: this._mapDimToEnName(fc.source),
             oper: fc.oper || 'EQUAL',
             targetValue: fc.targetValue || [],
           });
@@ -268,9 +284,9 @@ class WisedataApiClient {
             type: String(ob.type || 'DESC').toUpperCase(),
           }];
         } else {
-          // 按维度排序 → 做 en_name 映射
+          // 按维度排序 → 做 en_name 映射（缺映射会 warn 一次）
           orderBy = [{
-            colName: this._dimEnNameMap[ob.colName] || ob.colName,
+            colName: this._mapDimToEnName(ob.colName),
             type: String(ob.type || 'DESC').toUpperCase(),
           }];
         }

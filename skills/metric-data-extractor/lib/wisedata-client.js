@@ -7,7 +7,10 @@ const path = require('path');
 const BASE_URL = 'https://wo-drcn.dbankcloud.cn';
 const TARGET_URL = `${BASE_URL}/ads-data/#/digitalCockpit/volumeFluctuationAnalysis`;
 const ADS_API_BASE = `${BASE_URL}/ads-data/api`;
-const CHROME_PATH = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+// Chrome 可执行文件路径：默认 Windows 标准位置；其它平台 / 自定义安装走环境变量。
+// Linux 通常 /usr/bin/google-chrome；Mac /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
+const CHROME_PATH = process.env.PUPPETEER_CHROME_PATH
+  || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
 // headless 模式下使用持久化用户数据目录保存 SSO session cookie，
 // 避免每次刷新都重新触发 MFA 验证码。
 const PUPPETEER_USER_DATA_DIR = path.join(__dirname, '..', '.puppeteer-user-data');
@@ -56,7 +59,11 @@ class WisedataClient {
           return data;
         }
       }
-    } catch (e) {}
+    } catch (e) {
+      // 缓存损坏（如 JSON 解析失败）不影响主流程，但要让运维知道——
+      // 否则下次查询又会走 MFA 但没人知道为什么
+      console.error(`[loadFromCache] 读取失败: ${e.message}——将走完整登录流程`);
+    }
     return null;
   }
 
@@ -69,7 +76,10 @@ class WisedataClient {
       };
       fs.writeFileSync(CACHE_FILE, JSON.stringify(data, null, 2));
       console.error('Token 已缓存到文件');
-    } catch (e) {}
+    } catch (e) {
+      // 写缓存失败意味着下次查询又要走完整登录——必须 warn 而不是吞掉
+      console.error(`[saveToCache] 写入失败: ${e.message}——下次查询会重新触发 MFA`);
+    }
   }
 
   async browserLogin({ autoClose, headless } = {}) {
@@ -227,6 +237,21 @@ class WisedataClient {
 
   async waitWithTimeout(ms) {
     return new Promise(r => setTimeout(r, ms));
+  }
+
+  /**
+   * 主动释放浏览器资源——browserLogin 用 autoClose=false 时由 caller 调此方法。
+   * 多次调用安全（this.browser=null 后跳过）。
+   */
+  async close() {
+    if (!this.browser) return;
+    try {
+      await this.browser.close();
+    } catch (e) {
+      console.error(`[close] 关闭浏览器失败: ${e.message}`);
+    }
+    this.browser = null;
+    this.page = null;
   }
 
   async query(requestBody, _attempt = 0) {

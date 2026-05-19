@@ -23,7 +23,7 @@ class EntityMapper {
     this.dimensionValuesConfig = readCsv('config/dimension-values.csv').filter((row) => row.dimension_code);
   }
 
-  _isEnum(dimensionCode) {
+  isEnum(dimensionCode) {
     for (const row of this.dimensionsConfig) {
       if (row.dimension_code === dimensionCode) {
         return (row.dimension_type || '').trim().toLowerCase() === 'enum';
@@ -33,6 +33,7 @@ class EntityMapper {
   }
 
   // 只有 enum 和 semi-enum 需要 CSV 值校验。string/id/date/package 直接透传。
+  // 仍是内部辅助方法（外部调用 isEnum 即可）；保留 _ 前缀。
   _needsValueCheck(dimensionCode) {
     for (const row of this.dimensionsConfig) {
       if (row.dimension_code === dimensionCode) {
@@ -141,7 +142,7 @@ class EntityMapper {
           const mappedValue = this.mapDimensionValue(mappedKey.value, value);
           if (mappedValue.error) {
             // enum 维度：值集合穷举，直接列全集；非 enum：先 fuzzy 再 top-6
-            const suggestions = this._isEnum(mappedKey.value)
+            const suggestions = this.isEnum(mappedKey.value)
               ? this.getAllDimensionValues(mappedKey.value)
               : ((mappedValue.fuzzySuggestions && mappedValue.fuzzySuggestions.length)
                 ? mappedValue.fuzzySuggestions
