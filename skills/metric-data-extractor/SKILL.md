@@ -11,7 +11,26 @@ user-invocable: true
 
 ## 硬约束（违反即失败）
 
-1. **禁止自创指标 / 公式**：用户问"ROI"等不在系统的指标，**先问用户"用哪个公式"**，不要自己定义。
+1. **禁止心算衍生指标 / 自创公式**——优先查后端原生指标：
+
+   **看到 CPM / CTR / CVR / eCPM / 点击率 / 实际转化成本 等比例类指标，立即查后端**——这些
+   在 `metrics.csv` 里都有原生支持（`cpm` / `clickRate` / `cvr` / `ecpm` / `realityConversionCost`），
+   不要用 cost / exposure 等基础指标自己除。原因：
+
+   - **心算容易错单位**——用户看到的是"流水 408 万、曝光 1.18 亿"，LLM 心算时
+     中文单位（万/亿）换算多步极易差 10/100/1000 倍（实测见过 CPM 算成 3.46，
+     实际 34.6）
+   - **后端口径未必跟通用公式一致**——华为内部 CPM/CVR 可能有特定过滤、特定时间
+     口径（如 CVR 必须 request 口径），自己算出来口径不对
+
+   **正确做法**：先看 `list-metrics` 输出，**所有名字像衍生指标的都查一下**——
+   能直接 `--metrics "cpm"` / `--metrics "cvr"` 拿到精确值就别自己算。
+
+   ✅ `query-metrics --metrics "cpm" --time-mode event --dimensions "pt_d" ...`
+   ❌ 拉 cost + exposure 再心算 cost / exposure × 1000
+
+   只有用户问的指标**确实不在** `list-metrics` 输出里（如某些 ROI 变种），才询问用户
+   "用哪个公式"——不要凭"我会这个公式"自创定义。
 2. **必须英文 code**：`metrics` / `dimensions` / `filters` 的 key 都用英文 code（如 `click` 不是"点击量"，`promotionTarget` 不是"推广标的"）。不知道有哪些 code 时调 `list-metrics` / `list-dimensions`。
 3. **商业广告必须过滤**：用户问"流水 / 点击 / CPM / CVR" 等用于经营分析的指标时，必须加 `--filters "business_partnership=in:商业合作,集团商业竞价结算"`，否则会包含尾量 / 非商业数据。`business_partnership` 5 个值里只有这两个算商业流水（其余三个 `华为集团 / 自运营 / 集团商业竞价不结算` 都不算）。
 4. **`pt_d` 与 `reqDay` 不能混用**（新 API 协议只支持这两种时间维度，粒度概念已废）：
