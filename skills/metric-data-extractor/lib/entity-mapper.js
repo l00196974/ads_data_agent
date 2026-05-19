@@ -217,22 +217,18 @@ class EntityMapper {
   mapDimension(input) {
     const target = normalize(input);
 
-    // day/week/month 是事件时间口径下的时间粒度标记，
-    // 会被 DSLBuilder 映射到 timingDimension 参数（而非 API 维度）。
-    // API 返回结果中会自动增加 date 字段。
-    const timingGranularities = ['day', 'week', 'month'];
-    if (timingGranularities.includes(target)) {
+    // pt_d / reqDay 是时间维度标识（事件时间 / 请求时间口径），由 DSLBuilder
+    // 决定如何放进最终请求（pt_d 走 timingDimension；reqDay 直接进 dimensions
+    // 数组）。粒度概念（week/month）已废——新 API 协议下时间维度只有这两个。
+    const timingDimensions = ['pt_d', 'reqDay'];
+    if (timingDimensions.includes(target)) {
       return { value: target };
     }
 
     const aliasMap = {
-      日期: 'day',
-      天: 'day',
-      按天: 'day',
-      按周: 'week',
-      周: 'week',
-      按月: 'month',
-      月: 'month',
+      日期: 'pt_d',
+      天: 'pt_d',
+      按天: 'pt_d',
       推广对象: 'promotionTarget',
       计划名称: 'promotionTarget',
       渠道: 'channel',

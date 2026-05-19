@@ -18,7 +18,7 @@ const mapped = mapper.map({
 });
 
 assert.deepStrictEqual(mapped.metrics, ['cost', 'leads']);
-assert.deepStrictEqual(mapped.dimensions, ['day']);
+assert.deepStrictEqual(mapped.dimensions, ['pt_d']);
 assert.deepStrictEqual(mapped.filters.promotionTarget.targetValue, ['yuanbao_insurance']);
 assert.strictEqual(mapped.errors.length, 0);
 

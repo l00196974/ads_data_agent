@@ -34,11 +34,11 @@ class DSLBuilder {
 
     if (timeMode === 'request') {
       // 广告请求时间口径
-      // dateTimeFilter 扩展90天，确保延迟回传的转化数据不丢失
+      // dateTimeFilter 扩展 90 天，确保延迟回传的转化数据不丢失
       const extendedEnd = addDays(endDate, 90);
       dateTimeFilter = [{ start: startDate, end: extendedEnd }];
 
-      // 用 filterConditions 限制 reqDay 范围
+      // 用 filterConditions 限制 reqDay 范围（reqDay 是 API 原始维度名，不转 snake_case）
       filterConditions = [
         {
           oper: 'BETWEEN',
@@ -51,7 +51,7 @@ class DSLBuilder {
       // dimensions 里加 reqDay（如果用户没传）
       const dimensionsArray = Array.isArray(dimensions) ? dimensions : [];
       finalDimensions = dimensionsArray.includes('reqDay') ? dimensionsArray : ['reqDay', ...dimensionsArray];
-      timingDimension = null; // 请求时间口径不用 timingDimension
+      timingDimension = null; // 请求时间口径不用 timingDimension（reqDay 直接走 dimensions）
 
     } else {
       // 事件发生时间口径（event）
@@ -59,14 +59,14 @@ class DSLBuilder {
       filterConditions = existingFilters;
       const rawDimensions = Array.isArray(dimensions) ? dimensions : [];
 
-      // day/week/month 是时间粒度标记，映射到 timingDimension 参数，
-      // 不是 API 维度——必须从 dimensions 里移除。
-      // API 会在返回结果中自动增加 date 字段。
-      const timingKeys = ['day', 'week', 'month'];
+      // pt_d 是事件时间维度标识，剥离出来当 timingDimension 处理；api-client 内部
+      // 再把它统一写回 dimensions 数组（保持向 v2/value API 的协议一致）。
+      // 粒度概念（week/month）已废——新协议下只有 pt_d / req_day 两种时间维度。
+      const timingKeys = ['pt_d'];
       const detectedTiming = timingKeys.find(k => rawDimensions.includes(k));
       timingDimension = detectedTiming || null;
 
-      // 从 dimensions 中移除时间粒度标记，保留真正的业务维度
+      // 从 dimensions 移除时间标识，保留真正的业务维度（避免重复）
       finalDimensions = rawDimensions.filter(d => !timingKeys.includes(d));
     }
 

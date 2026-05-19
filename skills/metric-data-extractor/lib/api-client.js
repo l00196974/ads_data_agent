@@ -174,7 +174,7 @@ class WisedataApiClient {
    * DSLBuilder 输出示例：
    *   { dateTimeFilter: [{start: "2026-01-01", end: "2026-01-15"}],
    *     indicators: [{indicatorKey: "cost"}],
-   *     timingDimension: "day",
+   *     timingDimension: "pt_d",
    *     filterConditions: [{source, oper, targetValue}],
    *     dimensions: ["mediaName", ...],
    *     orderBy: [{source: "cost", order: "DESC"}],
@@ -183,8 +183,7 @@ class WisedataApiClient {
    * v2/value API 输出示例（camelCase）：
    *   { dateTimeFilter: {start: "epoch_ms", end: "epoch_ms"},
    *     indicators: [{id: "UUID", decimalPlaces: 2, original: false, timeFieldName: "pt_d"}],
-   *     timingDimensions: ["day"],
-   *     dimensions: ["media_name"],
+   *     dimensions: ["media_name", "pt_d"],   // 时间维度统一并入 dimensions
    *     dimensionCondition: {oper, source, targetValue},
    *     orderBy: [{colName, type}],
    *     limit: ... }
@@ -291,9 +290,10 @@ class WisedataApiClient {
     };
 
     // 时间维度统一用 'pt_d' 放在 dimensions 数组里（与 indicators[].timeFieldName: 'pt_d'
-    // 命名保持一致）。后端 v2/value API 已废弃独立的 timingDimensions 字段——
-    // DSLBuilder 仍按 body.timingDimension('day'/'week'/'month') 输出，这里统一转成
-    // dimensions 里的 'pt_d'，粒度信息不再透传（API 接口不再区分粒度）。
+    // 命名保持一致）。后端 v2/value API 已废弃独立的 timingDimensions 字段，且只支持
+    // pt_d / reqDay 两种时间维度（粒度概念 week/month 已废）。
+    // DSLBuilder 把事件时间口径下的 'pt_d' 标识剥到 body.timingDimension，这里把它
+    // 写回 dimensions（reqDay 由 DSLBuilder 直接放进 dimensions，无需此处处理）。
     if (body.timingDimension && !dimensions.includes('pt_d')) {
       dimensions.push('pt_d');
     }
@@ -310,12 +310,15 @@ class WisedataApiClient {
    * 将 v2/value API 响应转换为标准行格式
    *
    * v2/value 响应结构：
-   *   { data: [{ dimensionValues: {},
+   *   { data: [{ dimensionValues: {pt_d: "2026-01-01", media_name: "..."},
    *              indicatorValues: {"uuid": "value", ...},
-   *              timingValues: {day: "2026-01-01", timestamp: "..."} }],
+   *              timingValues: {pt_d: "2026-01-01", timestamp: "..."} }],
    *     count: N,
    *     dimensionNames: {},
    *     indicatorNames: {} }
+   *
+   * pt_d 可能落在 timingValues 或 dimensionValues 任一处（API 协议演进期间两种都见过）；
+   * 提取日期时**两边都看**。
    *
    * 转换为标准格式：
    *   [{ date: "2026-01-01", cost: "1000", cpm: "21.0", mediaName: "抖音", ... }]
@@ -345,16 +348,19 @@ class WisedataApiClient {
     const result = rows.map(row => {
       const entry = {};
 
-      // 提取日期
+      // 提取日期：先看 timingValues（API 协议旧位置），再 fallback 看 dimensionValues
+      // （新协议把 pt_d 当普通 dimension 返回时落在这里）。两个 key 名都试：
+      // pt_d（新协议）、day（旧协议兼容）。
       if (row.timingValues) {
-        // 优先用 timingValues.day/week/month，其次用 timestamp
         const timeKey = Object.keys(row.timingValues).find(k => k !== 'timestamp');
         entry.date = timeKey ? row.timingValues[timeKey] : null;
         if (!entry.date && row.timingValues.timestamp) {
-          // 从 timestamp 转日期
           const d = new Date(parseInt(row.timingValues.timestamp, 10));
           entry.date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
         }
+      }
+      if (!entry.date && row.dimensionValues) {
+        entry.date = row.dimensionValues.pt_d || row.dimensionValues.day || null;
       }
 
       // 展开维度值（用 dimension_code 作为 key）
