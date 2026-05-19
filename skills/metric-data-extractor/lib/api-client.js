@@ -315,10 +315,11 @@ class WisedataApiClient {
    * 转换为标准格式：
    *   [{ date: "2026-01-01", cost: "1000", cpm: "21.0", mediaName: "抖音", ... }]
    *
-   * preserveOrder: true 表示尊重 API 返回的顺序（用户传了 orderBy）；
-   *                false 时按 date 升序排（默认时间序展示更直观）。
+   * 不做任何排序——尊重 API 返回的原顺序。用户传 --sort-by 时 API 已按指定列排序；
+   * 不传时也保留 API 自然顺序（华为后端通常按 timingDimension 升序，但不在此处假设）。
+   * LLM 拿到原始顺序后可自行决定如何展示。
    */
-  _transformValueResponse(apiData, { preserveOrder = false } = {}) {
+  _transformValueResponse(apiData) {
     const rows = apiData.data || [];
     if (!Array.isArray(rows) || rows.length === 0) {
       return { data: [], total: 0 };
@@ -368,14 +369,6 @@ class WisedataApiClient {
       return entry;
     });
 
-    // 默认按 date 升序展示（时间序最直观）；但用户传 --sort-by 时**必须**保留后端返回的
-    // 顺序（后端已按用户的 orderBy 排），否则会用 date 排覆盖 cost/click 等指标排序意图——
-    // 用户写 `--sort-by cost --sort-order desc --limit 10` 想看"最烧钱的 10 行"，
-    // 这里再按 date 排就给错答案了。
-    if (!preserveOrder) {
-      result.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
-    }
-
     return { data: result, total: apiData.count || result.length };
   }
 
@@ -421,13 +414,8 @@ class WisedataApiClient {
         );
       }
 
-      // 将 v2/value 响应转换为标准行格式。
-      // preserveOrder: 用户传了 --sort-by 时保留后端按指标排序的结果，否则按 date 升序。
-      const userSpecifiedOrderBy = !!(requestBody.orderBy && requestBody.orderBy.length > 0);
-      const transformedData = this._transformValueResponse(
-        response.data.data,
-        { preserveOrder: userSpecifiedOrderBy },
-      );
+      // 将 v2/value 响应转换为标准行格式（保留 API 原顺序，不做任何前端重排）
+      const transformedData = this._transformValueResponse(response.data.data);
 
       // 构造与 HuaweiAdsClient.query() 一致的返回结构
       return {
