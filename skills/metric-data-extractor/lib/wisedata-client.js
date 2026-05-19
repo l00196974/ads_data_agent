@@ -13,6 +13,10 @@ const CHROME_PATH = process.env.PUPPETEER_CHROME_PATH
   || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
 // headless 模式下使用持久化用户数据目录保存 SSO session cookie，
 // 避免每次刷新都重新触发 MFA 验证码。
+//
+// 注意：Chromium profile 同一时刻只能被一个进程使用——当前设计假设**单实例部署**
+// （一台机器一个 backend）。若将来要扩到多副本，需要给目录加 PID/replica 后缀避免
+// 并发冲突。该限制已评估并保留（2026-05）。
 const PUPPETEER_USER_DATA_DIR = path.join(__dirname, '..', '.puppeteer-user-data');
 const CACHE_FILE = path.join(__dirname, '..', '.wisedata-token-cache.json');
 
@@ -223,6 +227,9 @@ class WisedataClient {
         throw new Error('未提取到有效 token');
       }
 
+      // wisedata token TTL：硬编码 1 小时——经评估实际服务端 TTL 即为 1 小时，
+      // 且 scheduler 每 15 分钟刷新一次足够覆盖，无需从响应里解析真实 expires
+      // （2026-05 评估保留）。若将来服务端调整 TTL，需要同步改这里 + scheduler interval。
       this.tokenExpiresAt = Date.now() + 60 * 60 * 1000;
       this.saveToCache();
       console.error(`[${now()}] [browserLogin] Token 缓存成功，有效期至: ${new Date(this.tokenExpiresAt).toLocaleString()}`);
