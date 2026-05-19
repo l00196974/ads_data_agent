@@ -290,13 +290,18 @@ class WisedataApiClient {
       useCache: 0,
     };
 
+    // 时间维度统一用 'pt_d' 放在 dimensions 数组里（与 indicators[].timeFieldName: 'pt_d'
+    // 命名保持一致）。后端 v2/value API 已废弃独立的 timingDimensions 字段——
+    // DSLBuilder 仍按 body.timingDimension('day'/'week'/'month') 输出，这里统一转成
+    // dimensions 里的 'pt_d'，粒度信息不再透传（API 接口不再区分粒度）。
+    if (body.timingDimension && !dimensions.includes('pt_d')) {
+      dimensions.push('pt_d');
+    }
+
     if (dimensions.length > 0) result.dimensions = dimensions;
     if (dimensionCondition) result.dimensionCondition = dimensionCondition;
     if (indicatorCondition) result.indicatorCondition = indicatorCondition;
     if (orderBy) result.orderBy = orderBy;
-    if (body.timingDimension) {
-      result.timingDimensions = Array.isArray(body.timingDimension) ? body.timingDimension : [body.timingDimension];
-    }
 
     return result;
   }
