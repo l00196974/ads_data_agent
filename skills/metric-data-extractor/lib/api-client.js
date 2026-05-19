@@ -379,9 +379,13 @@ class WisedataApiClient {
         entry.date = row.dimensionValues.pt_d || row.dimensionValues.day || null;
       }
 
-      // 展开维度值（用 dimension_code 作为 key）
+      // 展开维度值（用 dimension_code 作为 key）。
+      // **跳过时间维度 key**——pt_d / day / reqDay 的值已经规范化到 entry.date，
+      // 再单独展开成 entry.pt_d / entry.day 会让同一日期在结果里重复两次。
+      const TIME_DIM_KEYS = new Set(['pt_d', 'day', 'reqDay']);
       if (row.dimensionValues) {
         for (const [enName, value] of Object.entries(row.dimensionValues)) {
+          if (TIME_DIM_KEYS.has(enName)) continue;
           entry[enNameToCode[enName] || enName] = value;
         }
       }
