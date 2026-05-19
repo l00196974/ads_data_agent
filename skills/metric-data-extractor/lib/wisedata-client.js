@@ -229,196 +229,7 @@ class WisedataClient {
     return new Promise(r => setTimeout(r, ms));
   }
 
-  async tryFillLogin() {
-    if (!this.username) {
-      console.error('未配置用户名，请在浏览器页面中手动输入凭据完成登录');
-      return;
-    }
-    try {
-      await this.waitWithTimeout(2000);
-
-      const usernameSelectors = [
-        'input[type="text"]',
-        'input[name="username"]',
-        'input[placeholder*="用户"]',
-        '#username',
-        'input[id*="user"]',
-      ];
-
-      for (const sel of usernameSelectors) {
-        const el = await this.page.$(sel);
-        if (el) {
-          console.error('找到用户名输入框:', sel);
-          await el.click({ clickCount: 3 });
-          await this.page.keyboard.type(this.username, { delay: 50 });
-          break;
-        }
-      }
-
-      await this.waitWithTimeout(500);
-
-      const passSelectors = [
-        'input[type="password"]',
-        'input[name="password"]',
-        'input[placeholder*="密码"]',
-        '#password',
-      ];
-
-      for (const sel of passSelectors) {
-        const el = await this.page.$(sel);
-        if (el) {
-          console.error('找到密码输入框:', sel);
-          await el.click({ clickCount: 3 });
-          await this.page.keyboard.type(this.password, { delay: 50 });
-          break;
-        }
-      }
-
-      await this.waitWithTimeout(500);
-
-      const submitSelectors = [
-        'button[type="submit"]',
-        'input[type="submit"]',
-        'button:has-text("登录")',
-        'button:has-text("登陆")',
-        'button:has-text("登 录")',
-      ];
-
-      for (const sel of submitSelectors) {
-        try {
-          const el = await this.page.$(sel);
-          if (el) {
-            console.error('点击提交按钮...');
-            await el.click();
-            break;
-          }
-        } catch (e) {}
-      }
-
-    } catch (e) {
-      console.error('自动填写失败:', e.message);
-    }
-  }
-
-  /**
-   * 等待登录完成 — 监控 URL 直到不再包含登录关键词
-   * 这可以处理多种情况：
-   *   - 无 MFA：直接跳转到门户/ads-data
-   *   - 有 MFA：用户输入验证码后跳转
-   *   - session 有效：直接进入
-   */
-  async waitForLoginComplete(timeout) {
-    const start = Date.now();
-    const loginKeywords = ['login', 'uniportal', 'verification', 'auth'];
-
-    while (Date.now() - start < timeout) {
-      // 先检查是否已在 ads-data
-      if (this.page.url().includes('/ads-data/')) {
-        console.error('已在 ads-data 页面');
-        return true;
-      }
-
-      // 检查 URL 是否完全不含登录关键词
-      const url = this.page.url();
-      const onLoginPage = loginKeywords.some(k => url.includes(k));
-
-      if (!onLoginPage && url !== 'about:blank') {
-        console.error('检测到离开登录页:', url);
-        return true;
-      }
-
-      await this.waitWithTimeout(2000);
-    }
-    console.error('等待登录完成超时');
-    return false;
-  }
-
-  async waitForUrlContains(substring, timeout) {
-    const start = Date.now();
-    while (Date.now() - start < timeout) {
-      const url = this.page.url();
-      if (url.includes(substring)) {
-        console.error('检测到目标 URL:', url);
-        return true;
-      }
-      await this.waitWithTimeout(2000);
-    }
-    console.error(`等待 URL 包含 "${substring}" 超时`);
-    return false;
-  }
-
-  async extractTokens() {
-    // 1. 从 cookies 提取
-    const cookies = await this.page.cookies();
-    this.cookie = cookies.map(c => `${c.name}=${c.value}`).join('; ');
-    console.error('Cookie 数量:', cookies.length);
-    console.error('Cookie names:', cookies.map(c => c.name).join(', '));
-
-    // 尝试从 cookies 查找 x-csrf-token 或其他 token cookie
-    const tokenCookies = cookies.filter(c =>
-      c.name.toLowerCase().includes('csrf') ||
-      c.name.toLowerCase().includes('token') ||
-      c.name === 'x-csrf-token'
-    );
-    if (tokenCookies.length > 0) {
-      // 优先用名字为 "x-csrf-token" 的 cookie
-      const exactMatch = tokenCookies.find(c => c.name === 'x-csrf-token');
-      this.csrfToken = exactMatch ? exactMatch.value : tokenCookies[0].value;
-      console.error('从 cookies 提取到 csrfToken');
-    }
-
-    // 2. 从 localStorage/sessionStorage 找
-    if (!this.csrfToken) {
-      this.csrfToken = await this.page.evaluate(() => {
-        const keys = ['csrfToken', 'CSRF_TOKEN', 'token', 'authToken', 'x-csrf-token', 'csrf-token', 'env_token'];
-        for (const k of keys) {
-          const v = localStorage.getItem(k) || sessionStorage.getItem(k);
-          if (v) return v;
-        }
-        return null;
-      });
-      if (this.csrfToken) {
-        console.error('从 storage 提取到 csrfToken');
-      }
-    }
-
-    // 3. 最后手段：发 API 请求从响应头拿 x-csrf-token
-    if (!this.csrfToken) {
-      console.error('尝试从 API 响应头获取 csrfToken...');
-      try {
-        const result = await this.page.evaluate(async () => {
-          const controller = new AbortController();
-          setTimeout(() => controller.abort(), 10000);
-          const resp = await fetch('/ads-data/api/user/currentUser', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: '{}',
-            signal: controller.signal,
-          });
-          return {
-            csrfToken: resp.headers.get('x-csrf-token'),
-            status: resp.status
-          };
-        });
-        if (result.csrfToken) {
-          this.csrfToken = result.csrfToken;
-          console.error('从 API 响应头获取到 csrfToken');
-        } else {
-          console.error('API 响应头未包含 x-csrf-token, status:', result.status);
-        }
-      } catch (e) {
-        console.error('从 API 获取 csrfToken 失败:', e.message);
-      }
-    }
-
-    console.error('csrfToken:', this.csrfToken ? '已提取' : '未找到');
-    if (this.cookie) {
-      console.error('Cookie 长度:', this.cookie.length);
-      console.error('Cookie 前 100 字符:', this.cookie.substring(0, 100) + '...');
-    }
-  }
-
-  async query(requestBody) {
+  async query(requestBody, _attempt = 0) {
     await this.ensureValidToken();
 
     try {
@@ -446,11 +257,14 @@ class WisedataClient {
 
       return response;
     } catch (error) {
-      if (error.response?.status === 401 || error.response?.status === 403) {
-        console.error('Token 已失效，尝试重新登录...');
+      // 401/403 自动重新登录并重试一次——避免缓存 token 临近过期但 isTokenValid 误判仍有效。
+      // 加 attempt counter 防死循环：refresh 后服务端仍返 401（权限被收回 / SSO session 也死）
+      // 时直接抛错，而不是无限递归 query → ensureValidToken → query。
+      if ((error.response?.status === 401 || error.response?.status === 403) && _attempt < 1) {
+        console.error('Token 已失效，尝试重新登录后重试一次...');
         this.tokenExpiresAt = 0;
         await this.ensureValidToken();
-        return this.query(requestBody);
+        return this.query(requestBody, _attempt + 1);
       }
       if (error.response) {
         throw new Error(`API请求失败: ${error.response.status} - ${error.response.data?.message || error.message}`);

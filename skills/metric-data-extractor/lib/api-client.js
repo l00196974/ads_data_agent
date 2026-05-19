@@ -1,7 +1,25 @@
 const crypto = require('crypto');
 const axios = require('axios');
 const path = require('path');
+const fs = require('fs');
+const { execFile } = require('child_process');
 const { readCsv } = require('./csv-loader');
+
+// 包 execFile 成 Promise——避免 ensureAuth 里同步 execSync 冻住进程
+function execFileAsync(cmd, args, opts) {
+  return new Promise((resolve, reject) => {
+    const proc = execFile(cmd, args, opts, (err, stdout, stderr) => {
+      if (err) {
+        err.stdout = stdout;
+        err.stderr = stderr;
+        return reject(err);
+      }
+      resolve({ stdout, stderr });
+    });
+    // 监听 close 兜底：execFile 内部已处理 timeout（opts.timeout），这里无需再叠加
+    proc.on('error', reject);
+  });
+}
 
 const CACHE_FILE = path.join(__dirname, '..', '.wisedata-token-cache.json');
 
@@ -106,8 +124,6 @@ class WisedataApiClient {
   async ensureAuth() {
     if (this._cookie && this._csrfToken) return;
 
-    const fs = require('fs');
-
     // 从缓存加载认证凭据 — 不需要 username，交互式登录后缓存已有 cookie + csrfToken
     try {
       if (fs.existsSync(CACHE_FILE)) {
@@ -120,17 +136,18 @@ class WisedataApiClient {
       }
     } catch (_e) {}
 
-    // 缓存不存在或已过期——先尝试静默刷新（后台有定期刷新任务兜底，这里再试一次保底）
+    // 缓存不存在或已过期——尝试静默刷新（后台 scheduler 兜底，这里再试一次保底）。
+    // 用 execFile + Promise 替代 execSync——避免单次 query-metrics 在 token 续期时
+    // 同步阻塞 130 秒；async 等待期间事件循环仍可处理其它 IO。
     try {
       console.error('[WisedataApiClient.ensureAuth] 缓存过期，尝试静默刷新...');
-      const { execSync } = require('child_process');
-      execSync('node lib/refresh-wisedata-token.js', {
+      await execFileAsync('node', ['lib/refresh-wisedata-token.js'], {
         cwd: path.join(__dirname, '..'),
         timeout: 130000,  // 略长于刷新脚本的 120s 超时
-        stdio: ['ignore', 'ignore', 'pipe'],
+        windowsHide: true,
       });
       // 刷新成功后重新读取缓存
-      const data = JSON.parse(require('fs').readFileSync(CACHE_FILE, 'utf-8'));
+      const data = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf-8'));
       if (Date.now() < data.expiresAt) {
         this._cookie = data.cookie;
         this._csrfToken = data.csrfToken;
@@ -297,8 +314,11 @@ class WisedataApiClient {
    *
    * 转换为标准格式：
    *   [{ date: "2026-01-01", cost: "1000", cpm: "21.0", mediaName: "抖音", ... }]
+   *
+   * preserveOrder: true 表示尊重 API 返回的顺序（用户传了 orderBy）；
+   *                false 时按 date 升序排（默认时间序展示更直观）。
    */
-  _transformValueResponse(apiData) {
+  _transformValueResponse(apiData, { preserveOrder = false } = {}) {
     const rows = apiData.data || [];
     if (!Array.isArray(rows) || rows.length === 0) {
       return { data: [], total: 0 };
@@ -348,8 +368,13 @@ class WisedataApiClient {
       return entry;
     });
 
-    // 按 date 排序
-    result.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+    // 默认按 date 升序展示（时间序最直观）；但用户传 --sort-by 时**必须**保留后端返回的
+    // 顺序（后端已按用户的 orderBy 排），否则会用 date 排覆盖 cost/click 等指标排序意图——
+    // 用户写 `--sort-by cost --sort-order desc --limit 10` 想看"最烧钱的 10 行"，
+    // 这里再按 date 排就给错答案了。
+    if (!preserveOrder) {
+      result.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+    }
 
     return { data: result, total: apiData.count || result.length };
   }
@@ -396,8 +421,13 @@ class WisedataApiClient {
         );
       }
 
-      // 将 v2/value 响应转换为标准行格式
-      const transformedData = this._transformValueResponse(response.data.data);
+      // 将 v2/value 响应转换为标准行格式。
+      // preserveOrder: 用户传了 --sort-by 时保留后端按指标排序的结果，否则按 date 升序。
+      const userSpecifiedOrderBy = !!(requestBody.orderBy && requestBody.orderBy.length > 0);
+      const transformedData = this._transformValueResponse(
+        response.data.data,
+        { preserveOrder: userSpecifiedOrderBy },
+      );
 
       // 构造与 HuaweiAdsClient.query() 一致的返回结构
       return {
